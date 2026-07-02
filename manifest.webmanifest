@@ -1,0 +1,13 @@
+{
+  "name": "Daily Log",
+  "short_name": "Daily Log",
+  "description": "Personal food and IBS symptom tracker",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f5f4f0",
+  "theme_color": "#534AB7",
+  "icons": [
+    { "src": "icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
