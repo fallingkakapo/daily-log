@@ -394,6 +394,8 @@ input[type="range"]::-webkit-slider-thumb {
   display: flex;
   align-items: flex-end;
 }
+/* iOS Safari's [hidden] rule loses to the display:flex above; make hidden win everywhere */
+.sheet-overlay[hidden] { display: none !important; }
 .sheet {
   background: var(--bg);
   border-radius: 18px 18px 0 0;
