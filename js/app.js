@@ -1,6 +1,6 @@
 /* Daily Log — app shell, Today + History tabs, sheets. Trends rendering lives in trends.js */
 
-const TAGS = ['dairy', 'gluten', 'onion/garlic', 'caffeine', 'alcohol', 'spicy', 'high-fat'];
+const TAGS = ['dairy', 'gluten', 'onion/garlic', 'caffeine', 'spicy', 'high-fat'];
 
 const BRISTOL_DESC = {
   1: 'Type 1 — separate hard lumps',
@@ -58,6 +58,10 @@ function addDays(s, n) {
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function fmtUnits(v) {
+  return v % 1 ? v.toFixed(1) : String(v);
 }
 
 function isGoodDay(day) {
@@ -232,6 +236,7 @@ function renderCheckinCard(cardEl, date, day, onSaved) {
           <span class="pill">Stress <b>${day.stress}</b></span>
           ${day.sleep != null ? `<span class="pill">Sleep <b>${day.sleep}h</b></span>` : ''}
           ${day.exercise != null ? `<span class="pill">Exercise <b>${day.exercise}m</b></span>` : ''}
+          ${day.alcohol != null ? `<span class="pill">Alcohol <b>${fmtUnits(day.alcohol)}u</b></span>` : ''}
           <span class="pill">Bloating <b>${day.bloating}</b></span>
           <span class="pill">Gas <b>${day.gas}</b></span>
           <span class="pill">Urgency <b>${day.urgency}</b></span>
@@ -249,7 +254,7 @@ function renderCheckinCard(cardEl, date, day, onSaved) {
     return;
   }
 
-  const v = day || { bloating: 0, gas: 0, urgency: 0, stools: 0, bristol: null, wellbeing: 5, stress: 0, sleep: 7, exercise: 0, note: '' };
+  const v = day || { bloating: 0, gas: 0, urgency: 0, stools: 0, bristol: null, wellbeing: 5, stress: 0, sleep: 7, exercise: 0, alcohol: 0, note: '' };
 
   cardEl.innerHTML = `
     <div class="card">
@@ -264,6 +269,13 @@ function renderCheckinCard(cardEl, date, day, onSaved) {
         <button type="button" class="chip" data-add="30">+30</button>
         <button type="button" class="chip" data-add="60">+60</button>
         <button type="button" class="chip" id="ex-clear">reset</button>
+      </div>
+      <div class="slider-label" style="margin-top:14px"><span>Alcohol</span><span class="val" id="al-val">${fmtUnits(v.alcohol != null ? v.alcohol : 0)} units</span></div>
+      <div class="chip-row" style="margin-top:6px" id="al-chips">
+        <button type="button" class="chip" data-add="0.5">+0.5</button>
+        <button type="button" class="chip" data-add="1">+1</button>
+        <button type="button" class="chip" data-add="2">+2</button>
+        <button type="button" class="chip" id="al-clear">reset</button>
       </div>
     </div>
     <div class="card">
@@ -316,6 +328,17 @@ function renderCheckinCard(cardEl, date, day, onSaved) {
     exVal.textContent = '0 min';
   });
 
+  let alcohol = v.alcohol != null ? v.alcohol : 0;
+  const alVal = cardEl.querySelector('#al-val');
+  cardEl.querySelectorAll('#al-chips .chip[data-add]').forEach(c => c.addEventListener('click', () => {
+    alcohol = Math.min(50, Math.round((alcohol + Number(c.dataset.add)) * 10) / 10);
+    alVal.textContent = fmtUnits(alcohol) + ' units';
+  }));
+  cardEl.querySelector('#al-clear').addEventListener('click', () => {
+    alcohol = 0;
+    alVal.textContent = '0 units';
+  });
+
   let stools = v.stools;
   const stoolsEl = cardEl.querySelector('#ci-stools');
   cardEl.querySelectorAll('.stepper button').forEach(b => b.addEventListener('click', () => {
@@ -348,6 +371,7 @@ function renderCheckinCard(cardEl, date, day, onSaved) {
       stress: Number(cardEl.querySelector('#ci-stress').value),
       sleep: Number(cardEl.querySelector('#ci-sleep').value),
       exercise,
+      alcohol,
       note: cardEl.querySelector('#ci-note').value.trim(),
     };
     await dbPut('days', rec);

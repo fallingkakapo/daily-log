@@ -129,11 +129,12 @@ function renderTrends(container, allDays, windowDays, onWindowChange) {
 
   container.innerHTML = segRow + `
     <div class="metric-grid">
-      <div class="metric"><div class="m-label">Good days</div><div class="m-val">${goodDays}<small> / ${withData.length} logged</small></div></div>
+      <div class="metric" style="grid-column:1/-1"><div class="m-label">Good days</div><div class="m-val">${goodDays}<small> / ${withData.length} logged</small></div></div>
       <div class="metric"><div class="m-label">Avg wellbeing</div><div class="m-val">${fmtAvg(avg(series('wellbeing')))}<small> / 10</small></div></div>
       <div class="metric"><div class="m-label">Avg stress</div><div class="m-val">${fmtAvg(avg(series('stress')))}<small> / 10</small></div></div>
       <div class="metric"><div class="m-label">Avg sleep</div><div class="m-val">${fmtAvg(avg(series('sleep')), 'h')}</div></div>
       <div class="metric"><div class="m-label">Avg exercise</div><div class="m-val">${fmtAvg(avg(series('exercise')), 'm')}</div></div>
+      <div class="metric"><div class="m-label">Avg alcohol / day</div><div class="m-val">${fmtAvg(avg(series('alcohol')), 'u')}</div></div>
       <div class="metric"><div class="m-label">Avg stools / day</div><div class="m-val">${fmtAvg(avg(series('stools')))}</div></div>
     </div>
     ${chartCard('Overall wellbeing', 'daily rating / 10', lineChart(series('wellbeing'), 10, 'var(--well)', labels))}
@@ -145,6 +146,7 @@ function renderTrends(container, allDays, windowDays, onWindowChange) {
     ${chartCard('Sleep', 'hours per night', lineChart(series('sleep'), 12, 'var(--sleep)', labels))}
     ${chartCard('Stress', 'daily rating / 10', lineChart(series('stress'), 10, 'var(--stress)', labels))}
     ${chartCard('Exercise', 'minutes per day', barChart(series('exercise'), Math.max(60, ...series('exercise').filter(v => v != null)), 'var(--exercise)', labels))}
+    ${chartCard('Alcohol', 'units per day', barChart(series('alcohol'), Math.max(4, ...series('alcohol').filter(v => v != null)), 'var(--alcohol)', labels))}
   `;
   wireSegs(container, onWindowChange);
 }
