@@ -1,5 +1,7 @@
 /* Daily Log — app shell, Today + History tabs, sheets. Trends rendering lives in trends.js */
 
+const APP_VERSION = 'v6'; // keep in step with VERSION in sw.js
+
 const BRISTOL_DESC = {
   1: 'Type 1 — separate hard lumps',
   2: 'Type 2 — lumpy, sausage-shaped',
@@ -667,6 +669,7 @@ function openSettingsSheet() {
     <input type="file" id="s-file" accept=".json,application/json" hidden>
     <p class="settings-note">All data stays on this device — nothing is uploaded anywhere. Export a backup every week or two and keep it somewhere safe (Files, iCloud Drive). Importing a backup merges it with what's already here.</p>
     <p class="settings-note">Daily Log is a personal diary, not medical advice. Share exports with your doctor rather than self-diagnosing from patterns.</p>
+    <p class="settings-note" style="text-align:center">Daily Log ${APP_VERSION}</p>
   `);
   sheet.querySelector('#s-export').addEventListener('click', async () => {
     const data = await exportData();

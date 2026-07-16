@@ -6,14 +6,15 @@ const CHART_H = 74;
 const LABEL_H = 16;
 const PAD = 24;
 
-/* Gridlines at 0 / mid / max with labels in the left gutter */
-function yAxis(max) {
+/* Gridlines at min / mid / max with labels in the left gutter */
+function yAxis(max, min) {
+  min = min || 0;
   const fmt = v => (Number.isInteger(v) ? String(v) : v.toFixed(1));
-  const rows = [[max, 4], [max / 2, (CHART_H + 4) / 2], [0, CHART_H]];
+  const rows = [[max, 4], [(max + min) / 2, (CHART_H + 4) / 2], [min, CHART_H]];
   const parts = [];
   for (const [val, y] of rows) {
     parts.push(`<line x1="${PAD}" x2="${CHART_W}" y1="${y}" y2="${y}" stroke="currentColor" opacity="0.08"/>`);
-    if (val === 0 || val === max || Number.isInteger(val)) {
+    if (val === min || val === max || Number.isInteger(val)) {
       parts.push(`<text x="${PAD - 4}" y="${y + 3}" font-size="8.5" fill="currentColor" opacity="0.45" text-anchor="end">${fmt(val)}</text>`);
     }
   }
@@ -70,11 +71,17 @@ function barChart(values, max, color, labels) {
   return `<svg viewBox="0 0 ${CHART_W} ${CHART_H + LABEL_H}" role="img">${parts.join('')}</svg>`;
 }
 
-function lineChart(values, max, color, labels) {
+/* ymin raises the chart floor so shallow trends read better; both bounds
+   auto-extend whenever a data point falls outside them */
+function lineChart(values, max, color, labels, ymin) {
   const n = values.length;
+  const vals = values.filter(v => v != null);
+  const lo = vals.length ? Math.min(ymin || 0, Math.floor(Math.min(...vals))) : (ymin || 0);
+  const hi = vals.length ? Math.max(max, Math.ceil(Math.max(...vals))) : max;
+  const span = hi - lo || 1;
   const step = n > 1 ? (CHART_W - PAD) / (n - 1) : 0;
-  const pts = values.map((v, i) => v == null ? null : [PAD + i * step, CHART_H - 3 - (v / max) * (CHART_H - 8)]);
-  const parts = [yAxis(max)];
+  const pts = values.map((v, i) => v == null ? null : [PAD + i * step, CHART_H - 3 - ((v - lo) / span) * (CHART_H - 8)]);
+  const parts = [yAxis(hi, lo)];
   let seg = [];
   const flush = () => {
     if (seg.length > 1) parts.push(`<polyline points="${seg.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`);
@@ -180,14 +187,14 @@ function renderTrends(container, allDays, allStools, windowDays, onWindowChange)
       <div class="metric"><div class="m-label">Avg alcohol / day</div><div class="m-val">${fmtAvg(avg(series('alcohol')), 'u')}</div></div>
       <div class="metric"><div class="m-label">Avg stools / day</div><div class="m-val">${fmtAvg(avg(stoolSeries))}</div></div>
     </div>
-    ${chartCard('Overall wellbeing', 'daily rating / 10', lineChart(series('wellbeing'), 10, 'var(--well)', labels))}
+    ${chartCard('Overall wellbeing', 'daily rating / 10', lineChart(series('wellbeing'), 10, 'var(--well)', labels, 3))}
     ${chartCard('Bloating', 'avg ' + fmtAvg(avg(series('bloating'))) + ' / 5', barChart(series('bloating'), 5, 'var(--bloat)', labels))}
     ${chartCard('Gas', 'avg ' + fmtAvg(avg(series('gas'))) + ' / 5', barChart(series('gas'), 5, 'var(--gas)', labels))}
     ${chartCard('Urgency', 'avg ' + fmtAvg(avg(series('urgency'))) + ' / 5', barChart(series('urgency'), 5, 'var(--urg)', labels))}
     ${chartCard('Stools per day', '', barChart(stoolSeries, Math.max(4, ...stoolSeries.filter(v => v != null)), 'var(--muted)', labels))}
     ${visitTotal ? chartCard('Stool timing', visitTotal + ' visits by hour of day', barChart(hourCounts.map(c => c || null), Math.max(2, ...hourCounts), 'var(--urg)', hourLabels)) : ''}
     ${chartCard('Bristol distribution', bristolNums.length + ' rated', bristolChart(bristolNums))}
-    ${chartCard('Sleep', 'hours per night', lineChart(series('sleep'), 12, 'var(--sleep)', labels))}
+    ${chartCard('Sleep', 'hours per night', lineChart(series('sleep'), 12, 'var(--sleep)', labels, 3))}
     ${chartCard('Stress', 'daily rating / 10', lineChart(series('stress'), 10, 'var(--stress)', labels))}
     ${chartCard('Exercise', 'minutes per day', barChart(series('exercise'), Math.max(60, ...series('exercise').filter(v => v != null)), 'var(--exercise)', labels))}
     ${chartCard('Alcohol', 'units per day', barChart(series('alcohol'), Math.max(4, ...series('alcohol').filter(v => v != null)), 'var(--alcohol)', labels))}
