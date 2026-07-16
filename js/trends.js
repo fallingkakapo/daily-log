@@ -4,6 +4,21 @@
 const CHART_W = 320;
 const CHART_H = 74;
 const LABEL_H = 16;
+const PAD = 24;
+
+/* Gridlines at 0 / mid / max with labels in the left gutter */
+function yAxis(max) {
+  const fmt = v => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+  const rows = [[max, 4], [max / 2, (CHART_H + 4) / 2], [0, CHART_H]];
+  const parts = [];
+  for (const [val, y] of rows) {
+    parts.push(`<line x1="${PAD}" x2="${CHART_W}" y1="${y}" y2="${y}" stroke="currentColor" opacity="0.08"/>`);
+    if (val === 0 || val === max || Number.isInteger(val)) {
+      parts.push(`<text x="${PAD - 4}" y="${y + 3}" font-size="8.5" fill="currentColor" opacity="0.45" text-anchor="end">${fmt(val)}</text>`);
+    }
+  }
+  return parts.join('');
+}
 
 function trendDates(windowDays) {
   const dates = [];
@@ -38,10 +53,10 @@ function fmtAvg(v, unit) {
 function barChart(values, max, color, labels) {
   const n = values.length;
   const gap = n <= 7 ? 6 : n <= 31 ? 2 : 1;
-  const bw = (CHART_W - gap * (n - 1)) / n;
-  const parts = [];
+  const bw = (CHART_W - PAD - gap * (n - 1)) / n;
+  const parts = [yAxis(max)];
   for (let i = 0; i < n; i++) {
-    const x = i * (bw + gap);
+    const x = PAD + i * (bw + gap);
     if (values[i] == null) {
       parts.push(`<rect x="${x.toFixed(1)}" y="${CHART_H - 2}" width="${bw.toFixed(1)}" height="2" rx="1" fill="currentColor" opacity="0.12"/>`);
     } else {
@@ -57,9 +72,9 @@ function barChart(values, max, color, labels) {
 
 function lineChart(values, max, color, labels) {
   const n = values.length;
-  const step = n > 1 ? CHART_W / (n - 1) : 0;
-  const pts = values.map((v, i) => v == null ? null : [i * step, CHART_H - 3 - (v / max) * (CHART_H - 8)]);
-  const parts = [];
+  const step = n > 1 ? (CHART_W - PAD) / (n - 1) : 0;
+  const pts = values.map((v, i) => v == null ? null : [PAD + i * step, CHART_H - 3 - (v / max) * (CHART_H - 8)]);
+  const parts = [yAxis(max)];
   let seg = [];
   const flush = () => {
     if (seg.length > 1) parts.push(`<polyline points="${seg.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`);
@@ -72,17 +87,16 @@ function lineChart(values, max, color, labels) {
     for (const p of pts) if (p) parts.push(`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" fill="${color}"/>`);
   }
   if (labels) {
-    const bw = step || CHART_W;
     labels.forEach((l, i) => {
-      if (l) parts.push(`<text x="${(i * step).toFixed(1)}" y="${CHART_H + 12}" font-size="9" fill="currentColor" opacity="0.5" text-anchor="${n <= 7 ? 'middle' : (i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle')}">${l}</text>`);
+      if (l) parts.push(`<text x="${(PAD + i * step).toFixed(1)}" y="${CHART_H + 12}" font-size="9" fill="currentColor" opacity="0.5" text-anchor="${n <= 7 ? 'middle' : (i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle')}">${l}</text>`);
     });
   }
   return `<svg viewBox="0 0 ${CHART_W} ${CHART_H + LABEL_H}" role="img">${parts.join('')}</svg>`;
 }
 
-function bristolChart(days) {
+function bristolChart(nums) {
   const counts = [0, 0, 0, 0, 0, 0, 0];
-  for (const d of days) if (d && d.bristol >= 1 && d.bristol <= 7) counts[d.bristol - 1]++;
+  for (const n of nums) if (n >= 1 && n <= 7) counts[n - 1]++;
   const max = Math.max(1, ...counts);
   const gap = 8;
   const bw = (CHART_W - gap * 6) / 7;
@@ -105,13 +119,42 @@ function chartCard(title, avgText, svg) {
     </div>`;
 }
 
-function renderTrends(container, allDays, windowDays, onWindowChange) {
+function renderTrends(container, allDays, allStools, windowDays, onWindowChange) {
   const dates = trendDates(windowDays);
   const byDate = {};
   for (const d of allDays) byDate[d.date] = d;
+  const stoolsByDate = {};
+  for (const s of (allStools || [])) (stoolsByDate[s.date] = stoolsByDate[s.date] || []).push(s);
   const windowRecords = dates.map(dt => byDate[dt] || null);
   const withData = windowRecords.filter(Boolean);
   const labels = xLabels(dates);
+  const base = computeBaseline(allDays);
+
+  /* stools per day: logged visits win, manual daily count is the fallback */
+  const stoolSeries = dates.map(dt => {
+    const ev = stoolsByDate[dt];
+    if (ev && ev.length) return ev.length;
+    return byDate[dt] ? byDate[dt].stools : null;
+  });
+
+  /* bristol distribution: per-visit ratings where present, else the day's typical */
+  const bristolNums = [];
+  for (const dt of dates) {
+    const rated = (stoolsByDate[dt] || []).filter(s => s.bristol);
+    if (rated.length) bristolNums.push(...rated.map(s => s.bristol));
+    else if (byDate[dt] && byDate[dt].bristol) bristolNums.push(byDate[dt].bristol);
+  }
+
+  /* visits by hour of day */
+  const hourCounts = Array(24).fill(0);
+  let visitTotal = 0;
+  for (const dt of dates) {
+    for (const s of (stoolsByDate[dt] || [])) {
+      const h = parseInt(s.time, 10);
+      if (h >= 0 && h < 24) { hourCounts[h]++; visitTotal++; }
+    }
+  }
+  const hourLabels = Array.from({ length: 24 }, (_, h) => (h % 6 === 0 ? String(h) : ''));
 
   const segRow = `
     <div class="seg-row">
@@ -124,25 +167,26 @@ function renderTrends(container, allDays, windowDays, onWindowChange) {
     return;
   }
 
-  const goodDays = withData.filter(isGoodDay).length;
+  const goodDays = withData.filter(d => isGoodDay(d, base)).length;
   const series = key => windowRecords.map(d => d ? d[key] : null);
 
   container.innerHTML = segRow + `
     <div class="metric-grid">
-      <div class="metric" style="grid-column:1/-1"><div class="m-label">Good days</div><div class="m-val">${goodDays}<small> / ${withData.length} logged</small></div></div>
+      <div class="metric" style="grid-column:1/-1"><div class="m-label">Good days${base ? ' · vs your own baseline' : ''}</div><div class="m-val">${goodDays}<small> / ${withData.length} logged</small></div></div>
       <div class="metric"><div class="m-label">Avg wellbeing</div><div class="m-val">${fmtAvg(avg(series('wellbeing')))}<small> / 10</small></div></div>
       <div class="metric"><div class="m-label">Avg stress</div><div class="m-val">${fmtAvg(avg(series('stress')))}<small> / 10</small></div></div>
       <div class="metric"><div class="m-label">Avg sleep</div><div class="m-val">${fmtAvg(avg(series('sleep')), 'h')}</div></div>
       <div class="metric"><div class="m-label">Avg exercise</div><div class="m-val">${fmtAvg(avg(series('exercise')), 'm')}</div></div>
       <div class="metric"><div class="m-label">Avg alcohol / day</div><div class="m-val">${fmtAvg(avg(series('alcohol')), 'u')}</div></div>
-      <div class="metric"><div class="m-label">Avg stools / day</div><div class="m-val">${fmtAvg(avg(series('stools')))}</div></div>
+      <div class="metric"><div class="m-label">Avg stools / day</div><div class="m-val">${fmtAvg(avg(stoolSeries))}</div></div>
     </div>
     ${chartCard('Overall wellbeing', 'daily rating / 10', lineChart(series('wellbeing'), 10, 'var(--well)', labels))}
     ${chartCard('Bloating', 'avg ' + fmtAvg(avg(series('bloating'))) + ' / 5', barChart(series('bloating'), 5, 'var(--bloat)', labels))}
     ${chartCard('Gas', 'avg ' + fmtAvg(avg(series('gas'))) + ' / 5', barChart(series('gas'), 5, 'var(--gas)', labels))}
     ${chartCard('Urgency', 'avg ' + fmtAvg(avg(series('urgency'))) + ' / 5', barChart(series('urgency'), 5, 'var(--urg)', labels))}
-    ${chartCard('Stools per day', '', barChart(series('stools'), Math.max(4, ...series('stools').filter(v => v != null)), 'var(--muted)', labels))}
-    ${chartCard('Bristol distribution', withData.filter(d => d.bristol).length + ' days rated', bristolChart(withData))}
+    ${chartCard('Stools per day', '', barChart(stoolSeries, Math.max(4, ...stoolSeries.filter(v => v != null)), 'var(--muted)', labels))}
+    ${visitTotal ? chartCard('Stool timing', visitTotal + ' visits by hour of day', barChart(hourCounts.map(c => c || null), Math.max(2, ...hourCounts), 'var(--urg)', hourLabels)) : ''}
+    ${chartCard('Bristol distribution', bristolNums.length + ' rated', bristolChart(bristolNums))}
     ${chartCard('Sleep', 'hours per night', lineChart(series('sleep'), 12, 'var(--sleep)', labels))}
     ${chartCard('Stress', 'daily rating / 10', lineChart(series('stress'), 10, 'var(--stress)', labels))}
     ${chartCard('Exercise', 'minutes per day', barChart(series('exercise'), Math.max(60, ...series('exercise').filter(v => v != null)), 'var(--exercise)', labels))}

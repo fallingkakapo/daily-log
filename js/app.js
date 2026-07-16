@@ -1,7 +1,5 @@
 /* Daily Log — app shell, Today + History tabs, sheets. Trends rendering lives in trends.js */
 
-const TAGS = ['dairy', 'gluten', 'onion/garlic', 'caffeine', 'spicy', 'high-fat'];
-
 const BRISTOL_DESC = {
   1: 'Type 1 — separate hard lumps',
   2: 'Type 2 — lumpy, sausage-shaped',
@@ -18,7 +16,6 @@ const WELLBEING_WORDS = ['terrible', 'awful', 'poor', 'low', 'meh', 'okay', 'dec
 
 let currentTab = 'today';
 let expandedDate = null;
-let newMealTags = new Set();
 
 /* ---------- helpers ---------- */
 
@@ -64,8 +61,24 @@ function fmtUnits(v) {
   return v % 1 ? v.toFixed(1) : String(v);
 }
 
-function isGoodDay(day) {
-  return day && day.bloating <= 1 && day.gas <= 1 && day.urgency <= 1;
+/* Baseline = the user's own medians over all logged days (needs >=7 days).
+   A "good day" is at-or-below baseline on all three severities with a mid-range
+   Bristol type; before a baseline exists, fall back to the fixed <=1 rule. */
+function computeBaseline(days) {
+  if (!days || days.length < 7) return null;
+  const med = arr => { const s = [...arr].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+  return {
+    bloating: med(days.map(d => d.bloating)),
+    gas: med(days.map(d => d.gas)),
+    urgency: med(days.map(d => d.urgency)),
+  };
+}
+
+function isGoodDay(day, base) {
+  if (!day) return false;
+  if (!base) return day.bloating <= 1 && day.gas <= 1 && day.urgency <= 1;
+  const bristolOk = day.bristol == null || (day.bristol >= 3 && day.bristol <= 5);
+  return day.bloating <= base.bloating && day.gas <= base.gas && day.urgency <= base.urgency && bristolOk;
 }
 
 let toastTimer = null;
@@ -128,8 +141,8 @@ function getSuggestions(index, query) {
 async function renderToday() {
   const container = document.getElementById('tab-today');
   const date = todayStr();
-  const [meals, day, allMeals] = await Promise.all([
-    getMealsByDate(date), dbGet('days', date), dbGetAll('meals'),
+  const [meals, day, allMeals, visits] = await Promise.all([
+    getMealsByDate(date), dbGet('days', date), dbGetAll('meals'), getStoolsByDate(date),
   ]);
   const suggestionIndex = buildSuggestionIndex(allMeals);
   const yesterday = addDays(date, -1);
@@ -147,8 +160,6 @@ async function renderToday() {
         <button class="btn primary" id="meal-add">Add</button>
       </div>
       <div class="chip-row" id="meal-suggestions"></div>
-      <p class="tag-label">Tags (optional)</p>
-      <div class="chip-row" id="meal-tags"></div>
       <div class="meal-list" id="meal-list"></div>
     </div>
     <div id="checkin-card"></div>
@@ -160,18 +171,6 @@ async function renderToday() {
   const textInput = container.querySelector('#meal-text');
   const timeInput = container.querySelector('#meal-time');
   const sugRow = container.querySelector('#meal-suggestions');
-  const tagRow = container.querySelector('#meal-tags');
-
-  function renderTagChips() {
-    tagRow.innerHTML = TAGS.map(t =>
-      `<button class="chip tag ${newMealTags.has(t) ? 'on' : ''}" data-tag="${t}">${t}</button>`).join('');
-    tagRow.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
-      const t = c.dataset.tag;
-      newMealTags.has(t) ? newMealTags.delete(t) : newMealTags.add(t);
-      renderTagChips();
-    }));
-  }
-  renderTagChips();
 
   function renderSuggestions() {
     const sugs = getSuggestions(suggestionIndex, textInput.value);
@@ -190,8 +189,7 @@ async function renderToday() {
   async function addMeal() {
     const text = textInput.value.trim();
     if (!text) { textInput.focus(); return; }
-    await dbPut('meals', { id: crypto.randomUUID(), date, time: timeInput.value || nowTime(), text, tags: [...newMealTags] });
-    newMealTags = new Set();
+    await dbPut('meals', { id: crypto.randomUUID(), date, time: timeInput.value || nowTime(), text, tags: [] });
     toast('Logged: ' + text);
     renderToday();
   }
@@ -199,7 +197,7 @@ async function renderToday() {
   textInput.addEventListener('keydown', e => { if (e.key === 'Enter') addMeal(); });
 
   renderMealList(container.querySelector('#meal-list'), meals, () => renderToday());
-  renderCheckinCard(container.querySelector('#checkin-card'), date, day, () => renderToday());
+  renderCheckinCard(container.querySelector('#checkin-card'), date, day, visits, () => renderToday());
 }
 
 function renderMealList(listEl, meals, onChange) {
@@ -224,8 +222,34 @@ function renderMealList(listEl, meals, onChange) {
 
 /* ---------- check-in (shared by Today and History) ---------- */
 
-function renderCheckinCard(cardEl, date, day, onSaved) {
+function visitListHtml(visits) {
+  return `<div class="meal-list" id="ci-visits">${visits.map(s => `
+    <div class="meal-row" data-id="${s.id}">
+      <span class="meal-time">${s.time}</span>
+      <span class="meal-text">${s.bristol ? 'Type ' + s.bristol : 'Unrated'}${s.note ? ` <span class="meal-tags">· ${escapeHtml(s.note)}</span>` : ''}</span>
+    </div>`).join('')}</div>`;
+}
+
+function wireVisits(cardEl, date, visits, onChanged) {
+  const changed = async () => { await syncDayStools(date); onChanged(); };
+  cardEl.querySelector('#ci-add-visit').addEventListener('click', async () => {
+    if (date === todayStr()) {
+      await dbPut('stools', { id: crypto.randomUUID(), date, time: nowTime(), bristol: null, note: '' });
+      toast('Stool logged — tap it to rate');
+      changed();
+    } else {
+      openStoolSheet(null, date, changed);
+    }
+  });
+  cardEl.querySelectorAll('#ci-visits .meal-row').forEach(row => row.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openStoolSheet(visits.find(s => s.id === row.dataset.id), date, changed);
+  }));
+}
+
+function renderCheckinCard(cardEl, date, day, visits, onSaved) {
   const isToday = date === todayStr();
+  visits = visits || [];
   if (day && !cardEl.dataset.editing) {
     cardEl.innerHTML = `
       <div class="card">
@@ -240,17 +264,25 @@ function renderCheckinCard(cardEl, date, day, onSaved) {
           <span class="pill">Bloating <b>${day.bloating}</b></span>
           <span class="pill">Gas <b>${day.gas}</b></span>
           <span class="pill">Urgency <b>${day.urgency}</b></span>
-          <span class="pill">Stools <b>${day.stools}</b>${day.bristol ? ` · B<b>${day.bristol}</b>` : ''}</span>
+          <span class="pill">Stools <b>${visits.length || day.stools}</b>${day.bristol ? ` · B<b>${day.bristol}</b>` : ''}</span>
         </div>
         <button class="btn" id="checkin-edit">Edit</button>
       </div>
       ${day.note ? `<p class="empty-note" style="margin-top:8px">${escapeHtml(day.note)}</p>` : ''}
+      <div style="border-top: 0.5px solid var(--border); margin-top: 12px; padding-top: 4px;">
+        ${visitListHtml(visits)}
+        <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
+          <button type="button" class="btn" id="ci-add-visit">+ Log stool</button>
+          <span class="empty-note" style="flex:1; padding:0;">${visits.length ? 'Tap a visit to edit it' : (isToday ? 'Logs a visit at the current time' : 'Adds a visit to this day')}</span>
+        </div>
+      </div>
       </div>
     `;
     cardEl.querySelector('#checkin-edit').addEventListener('click', () => {
       cardEl.dataset.editing = '1';
-      renderCheckinCard(cardEl, date, day, onSaved);
+      renderCheckinCard(cardEl, date, day, visits, onSaved);
     });
+    wireVisits(cardEl, date, visits, onSaved);
     return;
   }
 
@@ -286,15 +318,21 @@ function renderCheckinCard(cardEl, date, day, onSaved) {
     </div>
     <div class="card">
       <h2>Stools</h2>
-      <div class="stepper-row" style="border-top:none; padding-top:0">
-        <span>Count</span>
+      ${visitListHtml(visits)}
+      <div style="display:flex; align-items:center; gap:10px; ${visits.length ? 'margin-top:6px;' : ''}">
+        <button type="button" class="btn" id="ci-add-visit">+ Log stool</button>
+        <span class="empty-note" style="flex:1; padding:0;">${visits.length ? `${visits.length} logged — tap one to edit` : (isToday ? 'Logs a visit at the current time' : 'Adds a visit to this day')}</span>
+      </div>
+      ${visits.length ? '' : `
+      <div class="stepper-row" style="margin-top:10px">
+        <span>Total for the day (manual)</span>
         <div class="stepper">
           <button type="button" data-step="-1" aria-label="Fewer">−</button>
           <span class="count" id="ci-stools">${v.stools}</span>
           <button type="button" data-step="1" aria-label="More">+</button>
         </div>
-      </div>
-      <p class="field-label" style="margin-top:4px">Typical Bristol type
+      </div>`}
+      <p class="field-label" style="margin-top:12px">Typical Bristol type
         <button type="button" class="info-btn" id="ci-bristol-info" aria-label="Bristol scale reference">?</button></p>
       <div class="bristol-row" id="ci-bristol">
         ${[1,2,3,4,5,6,7].map(n => `<button type="button" class="bristol-btn ${v.bristol === n ? 'on' : ''}" data-b="${n}">${n}</button>`).join('')}
@@ -339,12 +377,16 @@ function renderCheckinCard(cardEl, date, day, onSaved) {
     alVal.textContent = '0 units';
   });
 
-  let stools = v.stools;
+  let stools = visits.length || v.stools;
   const stoolsEl = cardEl.querySelector('#ci-stools');
-  cardEl.querySelectorAll('.stepper button').forEach(b => b.addEventListener('click', () => {
-    stools = Math.max(0, Math.min(15, stools + Number(b.dataset.step)));
-    stoolsEl.textContent = stools;
-  }));
+  if (stoolsEl) {
+    cardEl.querySelectorAll('.stepper button').forEach(b => b.addEventListener('click', () => {
+      stools = Math.max(0, Math.min(15, stools + Number(b.dataset.step)));
+      stoolsEl.textContent = stools;
+    }));
+  }
+
+  wireVisits(cardEl, date, visits, onSaved);
 
   let bristol = v.bristol;
   const bRow = cardEl.querySelector('#ci-bristol');
@@ -378,6 +420,53 @@ function renderCheckinCard(cardEl, date, day, onSaved) {
     delete cardEl.dataset.editing;
     toast('Check-in saved');
     onSaved();
+  });
+}
+
+/* Keep day.stools consistent with logged visits so exports and old views agree */
+async function syncDayStools(date) {
+  const [day, visits] = await Promise.all([dbGet('days', date), getStoolsByDate(date)]);
+  if (day && visits.length && day.stools !== visits.length) {
+    day.stools = visits.length;
+    await dbPut('days', day);
+  }
+}
+
+function openStoolSheet(visit, date, onChange) {
+  const isNew = !visit;
+  const v = visit || { id: crypto.randomUUID(), date, time: date === todayStr() ? nowTime() : '12:00', bristol: null, note: '' };
+  let bristol = v.bristol;
+  const sheet = openSheet(`
+    <h2>${isNew ? 'Add stool visit' : 'Edit stool visit'}</h2>
+    <div class="sheet-row"><input type="time" id="sv-time" value="${v.time}"></div>
+    <div class="bristol-row" id="sv-bristol">
+      ${[1, 2, 3, 4, 5, 6, 7].map(n => `<button type="button" class="bristol-btn ${bristol === n ? 'on' : ''}" data-b="${n}">${n}</button>`).join('')}
+    </div>
+    <p class="bristol-desc" id="sv-desc">${bristol ? BRISTOL_DESC[bristol] : 'Tap a type (optional)'}</p>
+    <div class="sheet-row"><input type="text" id="sv-note" placeholder="Note (optional)" value="${escapeHtml(v.note || '')}"></div>
+    <div class="actions">
+      ${isNew ? '' : '<button class="btn danger" id="sv-delete">Delete</button>'}
+      <button class="btn primary" id="sv-save">Save</button>
+    </div>
+  `);
+  sheet.querySelectorAll('#sv-bristol .bristol-btn').forEach(b => b.addEventListener('click', () => {
+    const n = Number(b.dataset.b);
+    bristol = bristol === n ? null : n;
+    sheet.querySelectorAll('#sv-bristol .bristol-btn').forEach(x => x.classList.toggle('on', Number(x.dataset.b) === bristol));
+    sheet.querySelector('#sv-desc').textContent = bristol ? BRISTOL_DESC[bristol] : 'Tap a type (optional)';
+  }));
+  sheet.querySelector('#sv-save').addEventListener('click', async () => {
+    await dbPut('stools', { ...v, time: sheet.querySelector('#sv-time').value || v.time, bristol, note: sheet.querySelector('#sv-note').value.trim() });
+    closeSheet();
+    toast(isNew ? 'Visit added' : 'Visit updated');
+    onChange();
+  });
+  const del = sheet.querySelector('#sv-delete');
+  if (del) del.addEventListener('click', async () => {
+    await dbDelete('stools', v.id);
+    closeSheet();
+    toast('Visit deleted');
+    onChange();
   });
 }
 
@@ -419,6 +508,7 @@ async function renderHistory() {
 
   container.innerHTML = `<div class="card" id="history-list"></div>`;
   const list = container.querySelector('#history-list');
+  const base = computeBaseline(allDays);
 
   for (const date of dates) {
     const day = dayByDate[date];
@@ -427,7 +517,7 @@ async function renderHistory() {
     row.className = 'day-row';
     row.innerHTML = `
       <span class="day-date">${fmtDate(date)}${date === today ? '<span class="weekday">today</span>' : ''}</span>
-      <span class="day-dots">${day ? severityDots(day) : '<span class="day-meta">no check-in</span>'}</span>
+      <span class="day-dots">${day ? severityDots(day, base) : '<span class="day-meta">no check-in</span>'}</span>
       <span class="day-meta">${meals.length ? meals.length + ' meal' + (meals.length > 1 ? 's' : '') : ''}</span>
       <svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6l-6 6"/></svg>
     `;
@@ -446,15 +536,16 @@ async function renderHistory() {
   }
 }
 
-function severityDots(day) {
+function severityDots(day, base) {
   const dot = (v, color) =>
     `<span class="dot" style="background:var(--${color}); opacity:${(0.15 + (v / 5) * 0.85).toFixed(2)}"></span>`;
-  const good = isGoodDay(day)
+  const good = isGoodDay(day, base)
     ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="var(--good)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:2px"><path d="M5 12l5 5l10 -10"/></svg>` : '';
   return `${good}${dot(day.bloating, 'bloat')}${dot(day.gas, 'gas')}${dot(day.urgency, 'urg')}`;
 }
 
-function fillDayDetail(detail, date, day, meals) {
+async function fillDayDetail(detail, date, day, meals) {
+  const visits = await getStoolsByDate(date);
   detail.innerHTML = `
     <p class="section-label">Meals</p>
     <div class="meal-list" id="d-meals"></div>
@@ -477,7 +568,7 @@ function fillDayDetail(detail, date, day, meals) {
   });
   detail.querySelectorAll('.meal-input-row, #d-checkin, .meal-list').forEach(el =>
     el.addEventListener('click', e => e.stopPropagation()));
-  renderCheckinCard(detail.querySelector('#d-checkin'), date, day, refresh);
+  renderCheckinCard(detail.querySelector('#d-checkin'), date, day, visits, refresh);
 }
 
 /* ---------- Trends tab ---------- */
@@ -486,8 +577,8 @@ let trendsWindow = 7;
 
 async function renderTrendsTab() {
   const container = document.getElementById('tab-trends');
-  const allDays = await dbGetAll('days');
-  renderTrends(container, allDays, trendsWindow, (w) => { trendsWindow = w; renderTrendsTab(); });
+  const [allDays, allStools] = await Promise.all([dbGetAll('days'), dbGetAll('stools')]);
+  renderTrends(container, allDays, allStools, trendsWindow, (w) => { trendsWindow = w; renderTrendsTab(); });
 }
 
 /* ---------- sheets ---------- */
@@ -506,32 +597,19 @@ function closeSheet() {
 }
 
 function openMealSheet(meal, onChange) {
-  let tags = new Set(meal.tags || []);
   const sheet = openSheet(`
     <h2>Edit meal</h2>
     <div class="sheet-row"><input type="text" id="em-text" value="${escapeHtml(meal.text)}"></div>
     <div class="sheet-row"><input type="time" id="em-time" value="${meal.time}"></div>
-    <div class="chip-row" id="em-tags"></div>
     <div class="actions">
       <button class="btn danger" id="em-delete">Delete</button>
       <button class="btn primary" id="em-save">Save</button>
     </div>
   `);
-  const tagRow = sheet.querySelector('#em-tags');
-  function renderTags() {
-    tagRow.innerHTML = TAGS.map(t =>
-      `<button class="chip tag ${tags.has(t) ? 'on' : ''}" data-tag="${t}">${t}</button>`).join('');
-    tagRow.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
-      const t = c.dataset.tag;
-      tags.has(t) ? tags.delete(t) : tags.add(t);
-      renderTags();
-    }));
-  }
-  renderTags();
   sheet.querySelector('#em-save').addEventListener('click', async () => {
     const text = sheet.querySelector('#em-text').value.trim();
     if (!text) return;
-    await dbPut('meals', { ...meal, text, time: sheet.querySelector('#em-time').value || meal.time, tags: [...tags] });
+    await dbPut('meals', { ...meal, text, time: sheet.querySelector('#em-time').value || meal.time, tags: meal.tags || [] });
     closeSheet();
     toast('Meal updated');
     onChange();
