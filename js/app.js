@@ -1,6 +1,6 @@
 /* Daily Log — app shell, Today + History tabs, sheets. Trends rendering lives in trends.js */
 
-const APP_VERSION = 'v6'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v7'; // keep in step with VERSION in sw.js
 
 const BRISTOL_DESC = {
   1: 'Type 1 — separate hard lumps',
@@ -63,24 +63,13 @@ function fmtUnits(v) {
   return v % 1 ? v.toFixed(1) : String(v);
 }
 
-/* Baseline = the user's own medians over all logged days (needs >=7 days).
-   A "good day" is at-or-below baseline on all three severities with a mid-range
-   Bristol type; before a baseline exists, fall back to the fixed <=1 rule. */
-function computeBaseline(days) {
-  if (!days || days.length < 7) return null;
-  const med = arr => { const s = [...arr].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
-  return {
-    bloating: med(days.map(d => d.bloating)),
-    gas: med(days.map(d => d.gas)),
-    urgency: med(days.map(d => d.urgency)),
-  };
-}
-
-function isGoodDay(day, base) {
+/* Fixed, objective rule — mirrored verbatim in the Trends label so the
+   number is always interpretable: every symptom <=2 and, if rated, Bristol 3-5 */
+function isGoodDay(day) {
   if (!day) return false;
-  if (!base) return day.bloating <= 1 && day.gas <= 1 && day.urgency <= 1;
   const bristolOk = day.bristol == null || (day.bristol >= 3 && day.bristol <= 5);
-  return day.bloating <= base.bloating && day.gas <= base.gas && day.urgency <= base.urgency && bristolOk;
+  const discomfortOk = day.discomfort == null || day.discomfort <= 2;
+  return day.bloating <= 2 && day.gas <= 2 && day.urgency <= 2 && discomfortOk && bristolOk;
 }
 
 let toastTimer = null;
@@ -178,11 +167,20 @@ async function renderToday() {
     const sugs = getSuggestions(suggestionIndex, textInput.value);
     sugRow.innerHTML = sugs.map((s, i) =>
       `<button class="chip suggestion" data-i="${i}">${escapeHtml(s.text)}</button>`).join('');
-    sugRow.querySelectorAll('.chip').forEach(c => c.addEventListener('click', async () => {
+    sugRow.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
       const s = sugs[Number(c.dataset.i)];
-      await dbPut('meals', { id: crypto.randomUUID(), date, time: nowTime(), text: s.text, tags: s.tags });
-      toast('Logged: ' + s.text);
-      renderToday();
+      const sheet = openSheet(`
+        <h2>Log meal</h2>
+        <p class="empty-note" style="margin-bottom:10px">${escapeHtml(s.text)}</p>
+        <div class="sheet-row"><input type="time" id="lm-time" value="${nowTime()}"></div>
+        <div class="actions"><button class="btn primary" id="lm-save">Log meal</button></div>
+      `);
+      sheet.querySelector('#lm-save').addEventListener('click', async () => {
+        await dbPut('meals', { id: crypto.randomUUID(), date, time: sheet.querySelector('#lm-time').value || nowTime(), text: s.text, tags: s.tags });
+        closeSheet();
+        toast('Logged: ' + s.text);
+        renderToday();
+      });
     }));
   }
   renderSuggestions();
@@ -260,12 +258,13 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved) {
         <div class="checkin-pills">
           ${day.wellbeing != null ? `<span class="pill">Wellbeing <b>${day.wellbeing}</b></span>` : ''}
           <span class="pill">Stress <b>${day.stress}</b></span>
-          ${day.sleep != null ? `<span class="pill">Sleep <b>${day.sleep}h</b></span>` : ''}
+          ${day.sleep != null ? `<span class="pill">Sleep <b>${day.sleep}h</b>${day.sleepQuality != null ? ` · q<b>${day.sleepQuality}</b>` : ''}</span>` : ''}
           ${day.exercise != null ? `<span class="pill">Exercise <b>${day.exercise}m</b></span>` : ''}
           ${day.alcohol != null ? `<span class="pill">Alcohol <b>${fmtUnits(day.alcohol)}u</b></span>` : ''}
           <span class="pill">Bloating <b>${day.bloating}</b></span>
           <span class="pill">Gas <b>${day.gas}</b></span>
           <span class="pill">Urgency <b>${day.urgency}</b></span>
+          ${day.discomfort != null ? `<span class="pill">Discomfort <b>${day.discomfort}</b></span>` : ''}
           <span class="pill">Stools <b>${visits.length || day.stools}</b>${day.bristol ? ` · B<b>${day.bristol}</b>` : ''}</span>
         </div>
         <button class="btn" id="checkin-edit">Edit</button>
@@ -288,7 +287,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved) {
     return;
   }
 
-  const v = day || { bloating: 0, gas: 0, urgency: 0, stools: 0, bristol: null, wellbeing: 5, stress: 0, sleep: 7, exercise: 0, alcohol: 0, note: '' };
+  const v = day || { bloating: 0, gas: 0, urgency: 0, discomfort: 0, stools: 0, bristol: null, wellbeing: 5, stress: 5, sleep: 7, sleepQuality: 5, exercise: 0, alcohol: 0, note: '' };
 
   cardEl.innerHTML = `
     <div class="card">
@@ -296,6 +295,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved) {
       ${slider('wellbeing', 'Overall wellbeing', v.wellbeing != null ? v.wellbeing : 5, 10, WELLBEING_WORDS)}
       ${slider('stress', 'Stress', v.stress, 10, STRESS_WORDS)}
       ${slider('sleep', 'Sleep', v.sleep != null ? v.sleep : 7, 12, null, 0.5, 'h')}
+      ${slider('sleep-quality', 'Sleep quality', v.sleepQuality != null ? v.sleepQuality : 5, 10, WELLBEING_WORDS)}
       <div class="slider-label"><span>Exercise</span><span class="val" id="ex-val">${v.exercise != null ? v.exercise : 0} min</span></div>
       <div class="chip-row" style="margin-top:6px" id="ex-chips">
         <button type="button" class="chip" data-add="5">+5 min</button>
@@ -317,6 +317,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved) {
       ${slider('bloating', 'Bloating', v.bloating, 5, SEVERITY_WORDS)}
       ${slider('gas', 'Gas', v.gas, 5, SEVERITY_WORDS)}
       ${slider('urgency', 'Urgency', v.urgency, 5, SEVERITY_WORDS)}
+      ${slider('discomfort', 'Discomfort / pain', v.discomfort != null ? v.discomfort : 0, 5, SEVERITY_WORDS)}
     </div>
     <div class="card">
       <h2>Stools</h2>
@@ -409,11 +410,13 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved) {
       bloating: Number(cardEl.querySelector('#ci-bloating').value),
       gas: Number(cardEl.querySelector('#ci-gas').value),
       urgency: Number(cardEl.querySelector('#ci-urgency').value),
+      discomfort: Number(cardEl.querySelector('#ci-discomfort').value),
       stools,
       bristol,
       wellbeing: Number(cardEl.querySelector('#ci-wellbeing').value),
       stress: Number(cardEl.querySelector('#ci-stress').value),
       sleep: Number(cardEl.querySelector('#ci-sleep').value),
+      sleepQuality: Number(cardEl.querySelector('#ci-sleep-quality').value),
       exercise,
       alcohol,
       note: cardEl.querySelector('#ci-note').value.trim(),
@@ -510,7 +513,6 @@ async function renderHistory() {
 
   container.innerHTML = `<div class="card" id="history-list"></div>`;
   const list = container.querySelector('#history-list');
-  const base = computeBaseline(allDays);
 
   for (const date of dates) {
     const day = dayByDate[date];
@@ -519,7 +521,7 @@ async function renderHistory() {
     row.className = 'day-row';
     row.innerHTML = `
       <span class="day-date">${fmtDate(date)}${date === today ? '<span class="weekday">today</span>' : ''}</span>
-      <span class="day-dots">${day ? severityDots(day, base) : '<span class="day-meta">no check-in</span>'}</span>
+      <span class="day-dots">${day ? severityDots(day) : '<span class="day-meta">no check-in</span>'}</span>
       <span class="day-meta">${meals.length ? meals.length + ' meal' + (meals.length > 1 ? 's' : '') : ''}</span>
       <svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6l-6 6"/></svg>
     `;
@@ -538,12 +540,12 @@ async function renderHistory() {
   }
 }
 
-function severityDots(day, base) {
+function severityDots(day) {
   const dot = (v, color) =>
     `<span class="dot" style="background:var(--${color}); opacity:${(0.15 + (v / 5) * 0.85).toFixed(2)}"></span>`;
-  const good = isGoodDay(day, base)
+  const good = isGoodDay(day)
     ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="var(--good)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:2px"><path d="M5 12l5 5l10 -10"/></svg>` : '';
-  return `${good}${dot(day.bloating, 'bloat')}${dot(day.gas, 'gas')}${dot(day.urgency, 'urg')}`;
+  return `${good}${dot(day.bloating, 'bloat')}${dot(day.gas, 'gas')}${dot(day.urgency, 'urg')}${day.discomfort != null ? dot(day.discomfort, 'discomfort') : ''}`;
 }
 
 async function fillDayDetail(detail, date, day, meals) {

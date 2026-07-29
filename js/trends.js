@@ -135,7 +135,6 @@ function renderTrends(container, allDays, allStools, windowDays, onWindowChange)
   const windowRecords = dates.map(dt => byDate[dt] || null);
   const withData = windowRecords.filter(Boolean);
   const labels = xLabels(dates);
-  const base = computeBaseline(allDays);
 
   /* stools per day: logged visits win, manual daily count is the fallback */
   const stoolSeries = dates.map(dt => {
@@ -174,15 +173,15 @@ function renderTrends(container, allDays, allStools, windowDays, onWindowChange)
     return;
   }
 
-  const goodDays = withData.filter(d => isGoodDay(d, base)).length;
+  const goodDays = withData.filter(isGoodDay).length;
   const series = key => windowRecords.map(d => d ? d[key] : null);
 
   container.innerHTML = segRow + `
     <div class="metric-grid">
-      <div class="metric" style="grid-column:1/-1"><div class="m-label">Good days${base ? ' · vs your own baseline' : ''}</div><div class="m-val">${goodDays}<small> / ${withData.length} logged</small></div></div>
+      <div class="metric" style="grid-column:1/-1"><div class="m-label">Good days · all symptoms ≤ 2 and Bristol 3–5</div><div class="m-val">${goodDays}<small> / ${withData.length} logged</small></div></div>
       <div class="metric"><div class="m-label">Avg wellbeing</div><div class="m-val">${fmtAvg(avg(series('wellbeing')))}<small> / 10</small></div></div>
       <div class="metric"><div class="m-label">Avg stress</div><div class="m-val">${fmtAvg(avg(series('stress')))}<small> / 10</small></div></div>
-      <div class="metric"><div class="m-label">Avg sleep</div><div class="m-val">${fmtAvg(avg(series('sleep')), 'h')}</div></div>
+      <div class="metric"><div class="m-label">Avg sleep</div><div class="m-val">${fmtAvg(avg(series('sleep')), 'h')}${avg(series('sleepQuality')) != null ? `<small> · q ${fmtAvg(avg(series('sleepQuality')))}</small>` : ''}</div></div>
       <div class="metric"><div class="m-label">Avg exercise</div><div class="m-val">${fmtAvg(avg(series('exercise')), 'm')}</div></div>
       <div class="metric"><div class="m-label">Avg alcohol / day</div><div class="m-val">${fmtAvg(avg(series('alcohol')), 'u')}</div></div>
       <div class="metric"><div class="m-label">Avg stools / day</div><div class="m-val">${fmtAvg(avg(stoolSeries))}</div></div>
@@ -191,10 +190,12 @@ function renderTrends(container, allDays, allStools, windowDays, onWindowChange)
     ${chartCard('Bloating', 'avg ' + fmtAvg(avg(series('bloating'))) + ' / 5', barChart(series('bloating'), 5, 'var(--bloat)', labels))}
     ${chartCard('Gas', 'avg ' + fmtAvg(avg(series('gas'))) + ' / 5', barChart(series('gas'), 5, 'var(--gas)', labels))}
     ${chartCard('Urgency', 'avg ' + fmtAvg(avg(series('urgency'))) + ' / 5', barChart(series('urgency'), 5, 'var(--urg)', labels))}
+    ${series('discomfort').some(v => v != null) ? chartCard('Discomfort / pain', 'avg ' + fmtAvg(avg(series('discomfort'))) + ' / 5', barChart(series('discomfort'), 5, 'var(--discomfort)', labels)) : ''}
     ${chartCard('Stools per day', '', barChart(stoolSeries, Math.max(4, ...stoolSeries.filter(v => v != null)), 'var(--muted)', labels))}
     ${visitTotal ? chartCard('Stool timing', visitTotal + ' visits by hour of day', barChart(hourCounts.map(c => c || null), Math.max(2, ...hourCounts), 'var(--urg)', hourLabels)) : ''}
     ${chartCard('Bristol distribution', bristolNums.length + ' rated', bristolChart(bristolNums))}
     ${chartCard('Sleep', 'hours per night', lineChart(series('sleep'), 12, 'var(--sleep)', labels, 3))}
+    ${series('sleepQuality').some(v => v != null) ? chartCard('Sleep quality', 'daily rating / 10', lineChart(series('sleepQuality'), 10, 'var(--sleepq)', labels, 3)) : ''}
     ${chartCard('Stress', 'daily rating / 10', lineChart(series('stress'), 10, 'var(--stress)', labels))}
     ${chartCard('Exercise', 'minutes per day', barChart(series('exercise'), Math.max(60, ...series('exercise').filter(v => v != null)), 'var(--exercise)', labels))}
     ${chartCard('Alcohol', 'units per day', barChart(series('alcohol'), Math.max(4, ...series('alcohol').filter(v => v != null)), 'var(--alcohol)', labels))}
