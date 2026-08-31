@@ -196,6 +196,7 @@ function renderTrends(container, allDays, allStools, windowDays, onWindowChange)
     ${chartCard('Bristol distribution', bristolNums.length + ' rated', bristolChart(bristolNums))}
     ${chartCard('Sleep', 'hours per night', lineChart(series('sleep'), 12, 'var(--sleep)', labels, 3))}
     ${series('sleepQuality').some(v => v != null) ? chartCard('Sleep quality', 'daily rating / 10', lineChart(series('sleepQuality'), 10, 'var(--sleepq)', labels, 3)) : ''}
+    ${series('fatigue').some(v => v != null) ? chartCard('Fatigue', 'avg ' + fmtAvg(avg(series('fatigue'))) + ' / 10', lineChart(series('fatigue'), 10, 'var(--fatigue)', labels, 3)) : ''}
     ${chartCard('Stress', 'daily rating / 10', lineChart(series('stress'), 10, 'var(--stress)', labels))}
     ${chartCard('Exercise', 'minutes per day', barChart(series('exercise'), Math.max(60, ...series('exercise').filter(v => v != null)), 'var(--exercise)', labels))}
     ${chartCard('Alcohol', 'units per day', barChart(series('alcohol'), Math.max(4, ...series('alcohol').filter(v => v != null)), 'var(--alcohol)', labels))}

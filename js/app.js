@@ -1,6 +1,6 @@
 /* Daily Log — app shell, Today + History tabs, sheets. Trends rendering lives in trends.js */
 
-const APP_VERSION = 'v7'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v8'; // keep in step with VERSION in sw.js
 
 const BRISTOL_DESC = {
   1: 'Type 1 — separate hard lumps',
@@ -15,6 +15,7 @@ const BRISTOL_DESC = {
 const SEVERITY_WORDS = ['none', 'very mild', 'mild', 'moderate', 'severe', 'very severe'];
 const STRESS_WORDS = ['none', 'minimal', 'low', 'low', 'mild', 'moderate', 'moderate', 'high', 'high', 'very high', 'extreme'];
 const WELLBEING_WORDS = ['terrible', 'awful', 'poor', 'low', 'meh', 'okay', 'decent', 'good', 'very good', 'great', 'excellent'];
+const FATIGUE_WORDS = ['', 'none', 'very low', 'low', 'mild', 'moderate', 'noticeable', 'high', 'very high', 'severe', 'exhausted'];
 
 let currentTab = 'today';
 let expandedDate = null;
@@ -230,24 +231,25 @@ function visitListHtml(visits) {
     </div>`).join('')}</div>`;
 }
 
+/* onChanged is the caller's full refresh handler (including syncDayStools) —
+   the form passes one that preserves unsaved slider values across the refresh */
 function wireVisits(cardEl, date, visits, onChanged) {
-  const changed = async () => { await syncDayStools(date); onChanged(); };
   cardEl.querySelector('#ci-add-visit').addEventListener('click', async () => {
     if (date === todayStr()) {
       await dbPut('stools', { id: crypto.randomUUID(), date, time: nowTime(), bristol: null, note: '' });
       toast('Stool logged — tap it to rate');
-      changed();
+      onChanged();
     } else {
-      openStoolSheet(null, date, changed);
+      openStoolSheet(null, date, onChanged);
     }
   });
   cardEl.querySelectorAll('#ci-visits .meal-row').forEach(row => row.addEventListener('click', (e) => {
     e.stopPropagation();
-    openStoolSheet(visits.find(s => s.id === row.dataset.id), date, changed);
+    openStoolSheet(visits.find(s => s.id === row.dataset.id), date, onChanged);
   }));
 }
 
-function renderCheckinCard(cardEl, date, day, visits, onSaved) {
+function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
   const isToday = date === todayStr();
   visits = visits || [];
   if (day && !cardEl.dataset.editing) {
@@ -259,6 +261,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved) {
           ${day.wellbeing != null ? `<span class="pill">Wellbeing <b>${day.wellbeing}</b></span>` : ''}
           <span class="pill">Stress <b>${day.stress}</b></span>
           ${day.sleep != null ? `<span class="pill">Sleep <b>${day.sleep}h</b>${day.sleepQuality != null ? ` · q<b>${day.sleepQuality}</b>` : ''}</span>` : ''}
+          ${day.fatigue != null ? `<span class="pill">Fatigue <b>${day.fatigue}</b></span>` : ''}
           ${day.exercise != null ? `<span class="pill">Exercise <b>${day.exercise}m</b></span>` : ''}
           ${day.alcohol != null ? `<span class="pill">Alcohol <b>${fmtUnits(day.alcohol)}u</b></span>` : ''}
           <span class="pill">Bloating <b>${day.bloating}</b></span>
@@ -283,11 +286,11 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved) {
       cardEl.dataset.editing = '1';
       renderCheckinCard(cardEl, date, day, visits, onSaved);
     });
-    wireVisits(cardEl, date, visits, onSaved);
+    wireVisits(cardEl, date, visits, async () => { await syncDayStools(date); onSaved(); });
     return;
   }
 
-  const v = day || { bloating: 0, gas: 0, urgency: 0, discomfort: 0, stools: 0, bristol: null, wellbeing: 5, stress: 5, sleep: 7, sleepQuality: 5, exercise: 0, alcohol: 0, note: '' };
+  const v = draft || day || { bloating: 0, gas: 0, urgency: 0, discomfort: 0, stools: 0, bristol: null, wellbeing: 5, stress: 5, sleep: 7, sleepQuality: 5, fatigue: 5, exercise: 0, alcohol: 0, note: '' };
 
   cardEl.innerHTML = `
     <div class="card">
@@ -296,6 +299,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved) {
       ${slider('stress', 'Stress', v.stress, 10, STRESS_WORDS)}
       ${slider('sleep', 'Sleep', v.sleep != null ? v.sleep : 7, 12, null, 0.5, 'h')}
       ${slider('sleep-quality', 'Sleep quality', v.sleepQuality != null ? v.sleepQuality : 5, 10, WELLBEING_WORDS)}
+      ${slider('fatigue', 'Fatigue', v.fatigue != null ? v.fatigue : 5, 10, FATIGUE_WORDS, 1, '', 1)}
       <div class="slider-label"><span>Exercise</span><span class="val" id="ex-val">${v.exercise != null ? v.exercise : 0} min</span></div>
       <div class="chip-row" style="margin-top:6px" id="ex-chips">
         <button type="button" class="chip" data-add="5">+5 min</button>
@@ -389,7 +393,27 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved) {
     }));
   }
 
-  wireVisits(cardEl, date, visits, onSaved);
+  const captureDraft = () => ({
+    bloating: Number(cardEl.querySelector('#ci-bloating').value),
+    gas: Number(cardEl.querySelector('#ci-gas').value),
+    urgency: Number(cardEl.querySelector('#ci-urgency').value),
+    discomfort: Number(cardEl.querySelector('#ci-discomfort').value),
+    stools,
+    bristol,
+    wellbeing: Number(cardEl.querySelector('#ci-wellbeing').value),
+    stress: Number(cardEl.querySelector('#ci-stress').value),
+    sleep: Number(cardEl.querySelector('#ci-sleep').value),
+    sleepQuality: Number(cardEl.querySelector('#ci-sleep-quality').value),
+    fatigue: Number(cardEl.querySelector('#ci-fatigue').value),
+    exercise,
+    alcohol,
+    note: cardEl.querySelector('#ci-note').value,
+  });
+  wireVisits(cardEl, date, visits, async () => {
+    const unsaved = captureDraft();
+    await syncDayStools(date);
+    renderCheckinCard(cardEl, date, day, await getStoolsByDate(date), onSaved, unsaved);
+  });
 
   let bristol = v.bristol;
   const bRow = cardEl.querySelector('#ci-bristol');
@@ -417,6 +441,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved) {
       stress: Number(cardEl.querySelector('#ci-stress').value),
       sleep: Number(cardEl.querySelector('#ci-sleep').value),
       sleepQuality: Number(cardEl.querySelector('#ci-sleep-quality').value),
+      fatigue: Number(cardEl.querySelector('#ci-fatigue').value),
       exercise,
       alcohol,
       note: cardEl.querySelector('#ci-note').value.trim(),
@@ -475,13 +500,13 @@ function openStoolSheet(visit, date, onChange) {
   });
 }
 
-function slider(id, label, value, max, words, step, unit) {
+function slider(id, label, value, max, words, step, unit, min) {
   const val = Number(value);
   const display = words ? `${val} · ${words[val]}` : `${val}${unit || ''}`;
   return `
     <div class="slider-group">
       <div class="slider-label"><span>${label}</span><span class="val" id="val-ci-${id}">${display}</span></div>
-      <input type="range" id="ci-${id}" min="0" max="${max}" step="${step || 1}" value="${val}"
+      <input type="range" id="ci-${id}" min="${min || 0}" max="${max}" step="${step || 1}" value="${val}"
         ${words ? `data-words='${JSON.stringify(words)}'` : ''} ${unit ? `data-unit="${unit}"` : ''}>
     </div>`;
 }
