@@ -1,7 +1,7 @@
 /* Network-first service worker: always tries the network so updates land
    immediately, falls back to cache when offline. Bump VERSION on releases. */
 
-const VERSION = 'dailylog-v9';
+const VERSION = 'dailylog-v10';
 const ASSETS = [
   '.',
   'index.html',

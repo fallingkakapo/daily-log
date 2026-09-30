@@ -1,6 +1,6 @@
 /* Daily Log — app shell, Today + History tabs, sheets. Trends rendering lives in trends.js */
 
-const APP_VERSION = 'v9'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v10'; // keep in step with VERSION in sw.js
 
 const BRISTOL_DESC = {
   1: 'Type 1 — separate hard lumps',
@@ -181,7 +181,6 @@ async function renderToday() {
   container.innerHTML = `
     <p class="date-heading">${fmtDate(date)}</p>
     ${!yDay && hasAnyData ? `<div class="nudge" id="yesterday-nudge">Yesterday's check-in is missing — <b>tap to fill it in</b></div>` : ''}
-    ${showDose ? '<div class="card" id="dose-card"></div>' : ''}
     <div class="card">
       <h2>Meals</h2>
       <div class="meal-input-row">
@@ -192,6 +191,7 @@ async function renderToday() {
       <div class="chip-row" id="meal-suggestions"></div>
       <div class="meal-list" id="meal-list"></div>
     </div>
+    ${showDose ? '<div class="card" id="dose-card"></div>' : ''}
     <div id="checkin-card"></div>
   `;
 

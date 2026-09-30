@@ -5,6 +5,7 @@ const CHART_W = 320;
 const CHART_H = 74;
 const LABEL_H = 16;
 const PAD = 24;
+const BRISTOL_BASELINE = 5.33; // Sept 2026 daily mean, the psyllium trial's pre-registered baseline
 
 /* Gridlines at min / mid / max with labels in the left gutter */
 function yAxis(max, min) {
@@ -33,7 +34,7 @@ function xLabels(dates) {
   return dates.map((d, i) => {
     if (n <= 7) return dateFromStr(d).toLocaleDateString('en-GB', { weekday: 'narrow' });
     const every = n <= 31 ? 7 : 28;
-    if (i % every === 0 || i === n - 1) {
+    if ((i % every === 0 && n - 1 - i >= every / 2) || i === n - 1) {
       const dt = dateFromStr(d);
       return `${dt.getDate()} ${dt.toLocaleDateString('en-GB', { month: 'short' })}`;
     }
@@ -72,8 +73,10 @@ function barChart(values, max, color, labels) {
 }
 
 /* ymin raises the chart floor so shallow trends read better; both bounds
-   auto-extend whenever a data point falls outside them */
-function lineChart(values, max, color, labels, ymin) {
+   auto-extend whenever a data point falls outside them.
+   opts.bands: per-index booleans shaded behind the line; opts.ref: dashed reference value */
+function lineChart(values, max, color, labels, ymin, opts) {
+  opts = opts || {};
   const n = values.length;
   const vals = values.filter(v => v != null);
   const lo = vals.length ? Math.min(ymin || 0, Math.floor(Math.min(...vals))) : (ymin || 0);
@@ -82,6 +85,19 @@ function lineChart(values, max, color, labels, ymin) {
   const step = n > 1 ? (CHART_W - PAD) / (n - 1) : 0;
   const pts = values.map((v, i) => v == null ? null : [PAD + i * step, CHART_H - 3 - ((v - lo) / span) * (CHART_H - 8)]);
   const parts = [yAxis(hi, lo)];
+  if (opts.bands) {
+    const half = n > 1 ? step / 2 : (CHART_W - PAD) / 2;
+    opts.bands.forEach((on, i) => {
+      if (!on) return;
+      const x0 = Math.max(PAD, PAD + i * step - half);
+      const x1 = Math.min(CHART_W, PAD + i * step + half);
+      parts.push(`<rect x="${x0.toFixed(1)}" y="0" width="${(x1 - x0).toFixed(1)}" height="${CHART_H}" fill="var(--accent)" opacity="0.1"/>`);
+    });
+  }
+  if (opts.ref != null && opts.ref >= lo && opts.ref <= hi) {
+    const y = CHART_H - 3 - ((opts.ref - lo) / span) * (CHART_H - 8);
+    parts.push(`<line x1="${PAD}" x2="${CHART_W}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="currentColor" opacity="0.35" stroke-dasharray="3 3"/>`);
+  }
   let seg = [];
   const flush = () => {
     if (seg.length > 1) parts.push(`<polyline points="${seg.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`);
@@ -173,6 +189,15 @@ function renderTrends(container, allDays, allStools, windowDays, onWindowChange)
     return;
   }
 
+  /* Psyllium trial primary outcome (pre-registered): daily MEAN Bristol of rated
+     per-visit logs — deliberately not the median used by isGoodDay */
+  const meanBristol = dates.map(dt => {
+    const rated = stoolVisits(stoolsByDate[dt]).map(s => s.bristol).filter(Boolean);
+    return rated.length ? rated.reduce((a, b) => a + b, 0) / rated.length : null;
+  });
+  const trialBands = dates.map(dt => { const p = trialPhase(dt); return !!(p && p.on); });
+  const anyTrial = dates.some(dt => trialPhase(dt));
+
   const goodDays = withData.filter(d => isGoodDay(d, stoolsByDate[d.date])).length;
   const series = key => windowRecords.map(d => d ? d[key] : null);
 
@@ -186,6 +211,7 @@ function renderTrends(container, allDays, allStools, windowDays, onWindowChange)
       <div class="metric"><div class="m-label">Avg alcohol / day</div><div class="m-val">${fmtAvg(avg(series('alcohol')), 'u')}</div></div>
       <div class="metric"><div class="m-label">Avg stools / day</div><div class="m-val">${fmtAvg(avg(stoolSeries))}</div></div>
     </div>
+    ${meanBristol.some(v => v != null) ? chartCard('Daily mean Bristol', 'avg ' + fmtAvg(avg(meanBristol)) + ' · rated visits', lineChart(meanBristol, 7, 'var(--gas)', labels, 3, { bands: trialBands, ref: BRISTOL_BASELINE }) + `<p class="chart-note"><span class="key-band"></span>psyllium ON${anyTrial ? '' : ' (none in view)'} &nbsp; <span class="key-ref"></span>Sept baseline ${BRISTOL_BASELINE}</p>`) : ''}
     ${chartCard('Overall wellbeing', 'daily rating / 10', lineChart(series('wellbeing'), 10, 'var(--well)', labels, 3))}
     ${chartCard('Bloating', 'avg ' + fmtAvg(avg(series('bloating'))) + ' / 5', barChart(series('bloating'), 5, 'var(--bloat)', labels))}
     ${chartCard('Gas', 'avg ' + fmtAvg(avg(series('gas'))) + ' / 5', barChart(series('gas'), 5, 'var(--gas)', labels))}

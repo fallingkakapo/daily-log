@@ -463,3 +463,7 @@ input[type="range"]::-webkit-slider-thumb {
 .dose-inline h2 { font-size: 15px; font-weight: 600; margin: 12px 0 6px; }
 .dose-inline h2 .sub { color: var(--muted); font-weight: 400; font-size: 13px; }
 .dose-mark { display: inline-block; font-size: 10px; font-weight: 600; color: var(--accent-text); background: var(--accent-soft); border-radius: 4px; padding: 1px 4px; margin-right: 5px; }
+
+.chart-note { font-size: 11px; color: var(--muted); margin: 6px 0 0; display: flex; align-items: center; gap: 5px; }
+.key-band { display: inline-block; width: 12px; height: 10px; border-radius: 2px; background: var(--accent); opacity: 0.25; }
+.key-ref { display: inline-block; width: 14px; border-top: 1.5px dashed currentColor; opacity: 0.6; }
