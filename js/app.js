@@ -1,6 +1,6 @@
 /* Daily Log — app shell, Today + History tabs, sheets. Trends rendering lives in trends.js */
 
-const APP_VERSION = 'v11'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v12'; // keep in step with VERSION in sw.js
 
 const BRISTOL_DESC = {
   1: 'Type 1 — separate hard lumps',
@@ -12,6 +12,7 @@ const BRISTOL_DESC = {
   7: 'Type 7 — liquid, no solid pieces',
 };
 
+const EXERCISE_TYPES = ['Cycling', 'Football', 'Running', 'Swimming', 'Other'];
 const SEVERITY_WORDS = ['none', 'very mild', 'mild', 'moderate', 'severe', 'very severe'];
 const STRESS_WORDS = ['none', 'minimal', 'low', 'low', 'mild', 'moderate', 'moderate', 'high', 'high', 'very high', 'extreme'];
 const WELLBEING_WORDS = ['terrible', 'awful', 'poor', 'low', 'meh', 'okay', 'decent', 'good', 'very good', 'great', 'excellent'];
@@ -403,7 +404,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
           <span class="pill">Stress <b>${day.stress}</b></span>
           ${day.sleep != null ? `<span class="pill">Sleep <b>${day.sleep}h</b>${day.sleepQuality != null ? ` · q<b>${day.sleepQuality}</b>` : ''}</span>` : ''}
           ${day.fatigue != null ? `<span class="pill">Fatigue <b>${day.fatigue}</b>${day.fatigueExercise ? ' · exercise' : ''}</span>` : ''}
-          ${day.exercise != null ? `<span class="pill">Exercise <b>${day.exercise}m</b></span>` : ''}
+          ${day.exercise != null ? `<span class="pill">Exercise <b>${day.exercise}m</b>${day.exerciseTypes && day.exerciseTypes.length ? ' · ' + day.exerciseTypes.join(', ').toLowerCase() : ''}</span>` : ''}
           ${day.alcohol != null ? `<span class="pill">Alcohol <b>${fmtUnits(day.alcohol)}u</b></span>` : ''}
           <span class="pill">Bloating <b>${day.bloating}</b></span>
           <span class="pill">Gas <b>${day.gas}</b></span>
@@ -433,7 +434,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
     return;
   }
 
-  const v = draft || day || { bloating: 0, gas: 0, urgency: 0, discomfort: 0, stools: 0, bristol: null, wellbeing: 5, stress: 5, sleep: 7, sleepQuality: 5, fatigue: 5, fatigueExercise: false, exercise: 0, alcohol: 0, note: '' };
+  const v = draft || day || { bloating: 0, gas: 0, urgency: 0, discomfort: 0, stools: 0, bristol: null, wellbeing: 5, stress: 5, sleep: 7, sleepQuality: 5, fatigue: 5, fatigueExercise: false, exercise: 0, exerciseTypes: [], alcohol: 0, note: '' };
 
   cardEl.innerHTML = `
     <div class="card">
@@ -453,6 +454,9 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
         <button type="button" class="chip" data-add="30">+30</button>
         <button type="button" class="chip" data-add="60">+60</button>
         <button type="button" class="chip" id="ex-clear">reset</button>
+      </div>
+      <div class="chip-row" style="margin-top:8px" id="ex-types">
+        ${EXERCISE_TYPES.map(t => `<button type="button" class="chip toggle ${(v.exerciseTypes || []).includes(t) ? 'on' : ''}" data-type="${t}" aria-pressed="${(v.exerciseTypes || []).includes(t)}">${t}</button>`).join('')}
       </div>
       <div class="slider-label" style="margin-top:14px"><span>Alcohol</span><span class="val" id="al-val">${fmtUnits(v.alcohol != null ? v.alcohol : 0)} units</span></div>
       <div class="chip-row" style="margin-top:6px" id="al-chips">
@@ -533,6 +537,16 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
 
   let stools = visits.length ? stoolCount : v.stools;
 
+  /* multi-select: a day can mix activities; kept in EXERCISE_TYPES order */
+  let exerciseTypes = [...(v.exerciseTypes || [])];
+  cardEl.querySelectorAll('#ex-types .chip').forEach(c => c.addEventListener('click', () => {
+    const t = c.dataset.type;
+    const on = !exerciseTypes.includes(t);
+    exerciseTypes = EXERCISE_TYPES.filter(x => x === t ? on : exerciseTypes.includes(x));
+    c.classList.toggle('on', on);
+    c.setAttribute('aria-pressed', on);
+  }));
+
   let fatigueExercise = !!v.fatigueExercise;
   const fxChip = cardEl.querySelector('#ci-fatigue-ex');
   fxChip.addEventListener('click', () => {
@@ -562,6 +576,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
     fatigue: Number(cardEl.querySelector('#ci-fatigue').value),
     fatigueExercise,
     exercise,
+    exerciseTypes,
     alcohol,
     note: cardEl.querySelector('#ci-note').value,
   });
@@ -600,6 +615,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
       fatigue: Number(cardEl.querySelector('#ci-fatigue').value),
       fatigueExercise,
       exercise,
+      exerciseTypes,
       alcohol,
       note: cardEl.querySelector('#ci-note').value.trim(),
     };

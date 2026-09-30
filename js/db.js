@@ -1,6 +1,6 @@
 /* IndexedDB wrapper. Four stores:
    meals:  {id, date 'YYYY-MM-DD', time 'HH:MM', text, tags[]}
-   days:   {date 'YYYY-MM-DD', bloating, gas, urgency, stools, bristol, wellbeing, stress, sleep, fatigue, fatigueExercise, exercise, alcohol, note}
+   days:   {date 'YYYY-MM-DD', bloating, gas, urgency, stools, bristol, wellbeing, stress, sleep, fatigue, fatigueExercise, exercise, exerciseTypes[], alcohol, note}
    stools: {id, date 'YYYY-MM-DD', time 'HH:MM', bristol 1-7|null, gasOnly, note} — one record per visit;
            gasOnly visits are excluded from stool counts and Bristol
    doses:  {id, date 'YYYY-MM-DD', time 'HH:MM', what 'psyllium', grams} — supplement intake, kept
