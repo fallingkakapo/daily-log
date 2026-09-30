@@ -1,6 +1,6 @@
 /* Daily Log — app shell, Today + History tabs, sheets. Trends rendering lives in trends.js */
 
-const APP_VERSION = 'v8'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v9'; // keep in step with VERSION in sw.js
 
 const BRISTOL_DESC = {
   1: 'Type 1 — separate hard lumps',
@@ -16,6 +16,15 @@ const SEVERITY_WORDS = ['none', 'very mild', 'mild', 'moderate', 'severe', 'very
 const STRESS_WORDS = ['none', 'minimal', 'low', 'low', 'mild', 'moderate', 'moderate', 'high', 'high', 'very high', 'extreme'];
 const WELLBEING_WORDS = ['terrible', 'awful', 'poor', 'low', 'meh', 'okay', 'decent', 'good', 'very good', 'great', 'excellent'];
 const FATIGUE_WORDS = ['', 'none', 'very low', 'low', 'mild', 'moderate', 'noticeable', 'high', 'very high', 'severe', 'exhausted'];
+
+/* Pre-registered n-of-1 schedule — the card follows it so ON/OFF is never a guess */
+const PSYLLIUM_GRAMS = 7.5;
+const PSYLLIUM_TRIAL = [
+  { from: '2026-09-30', to: '2026-10-13', on: true },
+  { from: '2026-10-14', to: '2026-10-20', on: false },
+  { from: '2026-10-21', to: '2026-11-03', on: true },
+  { from: '2026-11-04', to: '2026-11-10', on: false },
+];
 
 let currentTab = 'today';
 let expandedDate = null;
@@ -56,6 +65,16 @@ function addDays(s, n) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+function daysBetween(a, b) {
+  return Math.round((dateFromStr(b) - dateFromStr(a)) / 86400000);
+}
+
+function trialPhase(date) {
+  const block = PSYLLIUM_TRIAL.find(b => date >= b.from && date <= b.to);
+  if (!block) return null;
+  return { on: block.on, day: daysBetween(block.from, date) + 1, len: daysBetween(block.from, block.to) + 1 };
+}
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -64,11 +83,26 @@ function fmtUnits(v) {
   return v % 1 ? v.toFixed(1) : String(v);
 }
 
+/* Real stools only — gas-only visits are logged for timing but aren't stools */
+function stoolVisits(visits) {
+  return (visits || []).filter(s => !s.gasOnly);
+}
+
+/* The day's Bristol: median of rated visits when there are any, else the
+   check-in's "typical" type. Median, not mean — a day of 5s with one 6 is a 5 */
+function dayBristol(day, visits) {
+  const rated = stoolVisits(visits).map(s => s.bristol).filter(Boolean).sort((a, b) => a - b);
+  if (!rated.length) return day ? day.bristol : null;
+  const mid = rated.length >> 1;
+  return rated.length % 2 ? rated[mid] : (rated[mid - 1] + rated[mid]) / 2;
+}
+
 /* Fixed, objective rule — mirrored verbatim in the Trends label so the
    number is always interpretable: every symptom <=2 and, if rated, Bristol 3-5 */
-function isGoodDay(day) {
+function isGoodDay(day, visits) {
   if (!day) return false;
-  const bristolOk = day.bristol == null || (day.bristol >= 3 && day.bristol <= 5);
+  const b = dayBristol(day, visits);
+  const bristolOk = b == null || (b >= 3 && b <= 5);
   const discomfortOk = day.discomfort == null || day.discomfort <= 2;
   return day.bloating <= 2 && day.gas <= 2 && day.urgency <= 2 && discomfortOk && bristolOk;
 }
@@ -133,9 +167,12 @@ function getSuggestions(index, query) {
 async function renderToday() {
   const container = document.getElementById('tab-today');
   const date = todayStr();
-  const [meals, day, allMeals, visits] = await Promise.all([
-    getMealsByDate(date), dbGet('days', date), dbGetAll('meals'), getStoolsByDate(date),
+  const [meals, day, allMeals, visits, doses, allDoses] = await Promise.all([
+    getMealsByDate(date), dbGet('days', date), dbGetAll('meals'), getStoolsByDate(date), getDosesByDate(date), dbGetAll('doses'),
   ]);
+  /* Card shows during the trial, and afterwards while doses are still being logged */
+  const recentDose = allDoses.some(x => x.date >= addDays(date, -14));
+  const showDose = trialPhase(date) || recentDose;
   const suggestionIndex = buildSuggestionIndex(allMeals);
   const yesterday = addDays(date, -1);
   const yDay = await dbGet('days', yesterday);
@@ -144,6 +181,7 @@ async function renderToday() {
   container.innerHTML = `
     <p class="date-heading">${fmtDate(date)}</p>
     ${!yDay && hasAnyData ? `<div class="nudge" id="yesterday-nudge">Yesterday's check-in is missing — <b>tap to fill it in</b></div>` : ''}
+    ${showDose ? '<div class="card" id="dose-card"></div>' : ''}
     <div class="card">
       <h2>Meals</h2>
       <div class="meal-input-row">
@@ -197,6 +235,7 @@ async function renderToday() {
   container.querySelector('#meal-add').addEventListener('click', addMeal);
   textInput.addEventListener('keydown', e => { if (e.key === 'Enter') addMeal(); });
 
+  if (showDose) renderDoseCard(container.querySelector('#dose-card'), date, doses, () => renderToday());
   renderMealList(container.querySelector('#meal-list'), meals, () => renderToday());
   renderCheckinCard(container.querySelector('#checkin-card'), date, day, visits, () => renderToday());
 }
@@ -221,13 +260,76 @@ function renderMealList(listEl, meals, onChange) {
   });
 }
 
+/* ---------- psyllium (shared by Today and History) ---------- */
+
+function renderDoseCard(el, date, doses, onChange) {
+  const phase = trialPhase(date);
+  const phaseText = phase ? `${phase.on ? 'ON' : 'OFF'} · day ${phase.day} of ${phase.len}` : '';
+  const hint = doses.length ? 'Tap to change the time'
+    : phase && !phase.on ? 'OFF week — no dose today'
+    : date === todayStr() ? 'Logs a dose at the current time' : 'Adds a dose to this day';
+  el.innerHTML = `
+    <h2>Psyllium <span class="sub">· ${PSYLLIUM_GRAMS} g${phaseText ? ' · ' + phaseText : ''}</span></h2>
+    ${doses.length ? `<div class="meal-list">${doses.map(x => `
+      <div class="meal-row" data-id="${x.id}">
+        <span class="meal-time">${x.time}</span>
+        <span class="meal-text">Taken${x.grams !== PSYLLIUM_GRAMS ? ` · ${x.grams} g` : ''}</span>
+      </div>`).join('')}</div>` : `
+      <div class="visit-btns">
+        <button type="button" class="btn ${phase && !phase.on ? '' : 'primary'}" id="dose-add">Log dose</button>
+      </div>`}
+    <p class="empty-note" style="padding:6px 0 0;">${hint}</p>
+  `;
+  const add = el.querySelector('#dose-add');
+  if (add) add.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (date === todayStr()) {
+      await dbPut('doses', { id: crypto.randomUUID(), date, time: nowTime(), what: 'psyllium', grams: PSYLLIUM_GRAMS });
+      toast('Psyllium logged');
+      onChange();
+    } else {
+      openDoseSheet(null, date, onChange);
+    }
+  });
+  el.querySelectorAll('.meal-row').forEach(row => row.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openDoseSheet(doses.find(x => x.id === row.dataset.id), date, onChange);
+  }));
+}
+
+function openDoseSheet(dose, date, onChange) {
+  const isNew = !dose;
+  const x = dose || { id: crypto.randomUUID(), date, time: '09:00', what: 'psyllium', grams: PSYLLIUM_GRAMS };
+  const sheet = openSheet(`
+    <h2>${isNew ? 'Add psyllium dose' : 'Edit psyllium dose'}</h2>
+    <div class="sheet-row"><input type="time" id="ds-time" value="${x.time}"></div>
+    <div class="actions">
+      ${isNew ? '' : '<button class="btn danger" id="ds-delete">Delete</button>'}
+      <button class="btn primary" id="ds-save">Save</button>
+    </div>
+  `);
+  sheet.querySelector('#ds-save').addEventListener('click', async () => {
+    await dbPut('doses', { ...x, time: sheet.querySelector('#ds-time').value || x.time });
+    closeSheet();
+    toast(isNew ? 'Dose added' : 'Dose updated');
+    onChange();
+  });
+  const del = sheet.querySelector('#ds-delete');
+  if (del) del.addEventListener('click', async () => {
+    await dbDelete('doses', x.id);
+    closeSheet();
+    toast('Dose deleted');
+    onChange();
+  });
+}
+
 /* ---------- check-in (shared by Today and History) ---------- */
 
 function visitListHtml(visits) {
   return `<div class="meal-list" id="ci-visits">${visits.map(s => `
     <div class="meal-row" data-id="${s.id}">
       <span class="meal-time">${s.time}</span>
-      <span class="meal-text">${s.bristol ? 'Type ' + s.bristol : 'Unrated'}${s.note ? ` <span class="meal-tags">· ${escapeHtml(s.note)}</span>` : ''}</span>
+      <span class="meal-text">${s.gasOnly ? 'Gas only' : s.bristol ? 'Type ' + s.bristol : 'Unrated'}${s.note ? ` <span class="meal-tags">· ${escapeHtml(s.note)}</span>` : ''}</span>
     </div>`).join('')}</div>`;
 }
 
@@ -243,6 +345,15 @@ function wireVisits(cardEl, date, visits, onChanged) {
       openStoolSheet(null, date, onChanged);
     }
   });
+  cardEl.querySelector('#ci-add-gas').addEventListener('click', async () => {
+    if (date === todayStr()) {
+      await dbPut('stools', { id: crypto.randomUUID(), date, time: nowTime(), bristol: null, gasOnly: true, note: '' });
+      toast('Gas-only visit logged');
+      onChanged();
+    } else {
+      openStoolSheet(null, date, onChanged, true);
+    }
+  });
   cardEl.querySelectorAll('#ci-visits .meal-row').forEach(row => row.addEventListener('click', (e) => {
     e.stopPropagation();
     openStoolSheet(visits.find(s => s.id === row.dataset.id), date, onChanged);
@@ -252,7 +363,10 @@ function wireVisits(cardEl, date, visits, onChanged) {
 function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
   const isToday = date === todayStr();
   visits = visits || [];
+  const stoolCount = stoolVisits(visits).length;
+  const gasCount = visits.length - stoolCount;
   if (day && !cardEl.dataset.editing) {
+    const bristol = dayBristol(day, visits);
     cardEl.innerHTML = `
       <div class="card">
       <h2>Daily check-in <span class="sub">· done</span></h2>
@@ -261,24 +375,26 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
           ${day.wellbeing != null ? `<span class="pill">Wellbeing <b>${day.wellbeing}</b></span>` : ''}
           <span class="pill">Stress <b>${day.stress}</b></span>
           ${day.sleep != null ? `<span class="pill">Sleep <b>${day.sleep}h</b>${day.sleepQuality != null ? ` · q<b>${day.sleepQuality}</b>` : ''}</span>` : ''}
-          ${day.fatigue != null ? `<span class="pill">Fatigue <b>${day.fatigue}</b></span>` : ''}
+          ${day.fatigue != null ? `<span class="pill">Fatigue <b>${day.fatigue}</b>${day.fatigueExercise ? ' · exercise' : ''}</span>` : ''}
           ${day.exercise != null ? `<span class="pill">Exercise <b>${day.exercise}m</b></span>` : ''}
           ${day.alcohol != null ? `<span class="pill">Alcohol <b>${fmtUnits(day.alcohol)}u</b></span>` : ''}
           <span class="pill">Bloating <b>${day.bloating}</b></span>
           <span class="pill">Gas <b>${day.gas}</b></span>
           <span class="pill">Urgency <b>${day.urgency}</b></span>
           ${day.discomfort != null ? `<span class="pill">Discomfort <b>${day.discomfort}</b></span>` : ''}
-          <span class="pill">Stools <b>${visits.length || day.stools}</b>${day.bristol ? ` · B<b>${day.bristol}</b>` : ''}</span>
+          <span class="pill">Stools <b>${visits.length ? stoolCount : day.stools}</b>${bristol ? ` · B<b>${bristol}</b>` : ''}</span>
+          ${gasCount ? `<span class="pill">Gas only <b>${gasCount}</b></span>` : ''}
         </div>
         <button class="btn" id="checkin-edit">Edit</button>
       </div>
       ${day.note ? `<p class="empty-note" style="margin-top:8px">${escapeHtml(day.note)}</p>` : ''}
       <div style="border-top: 0.5px solid var(--border); margin-top: 12px; padding-top: 4px;">
         ${visitListHtml(visits)}
-        <div style="display:flex; align-items:center; gap:10px; margin-top:8px;">
+        <div class="visit-btns" style="margin-top:8px;">
           <button type="button" class="btn" id="ci-add-visit">+ Log stool</button>
-          <span class="empty-note" style="flex:1; padding:0;">${visits.length ? 'Tap a visit to edit it' : (isToday ? 'Logs a visit at the current time' : 'Adds a visit to this day')}</span>
+          <button type="button" class="btn" id="ci-add-gas">+ Gas only</button>
         </div>
+        <p class="empty-note" style="padding:6px 0 0;">${visits.length ? 'Tap a visit to edit it' : (isToday ? 'Logs a visit at the current time' : 'Adds a visit to this day')}</p>
       </div>
       </div>
     `;
@@ -290,7 +406,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
     return;
   }
 
-  const v = draft || day || { bloating: 0, gas: 0, urgency: 0, discomfort: 0, stools: 0, bristol: null, wellbeing: 5, stress: 5, sleep: 7, sleepQuality: 5, fatigue: 5, exercise: 0, alcohol: 0, note: '' };
+  const v = draft || day || { bloating: 0, gas: 0, urgency: 0, discomfort: 0, stools: 0, bristol: null, wellbeing: 5, stress: 5, sleep: 7, sleepQuality: 5, fatigue: 5, fatigueExercise: false, exercise: 0, alcohol: 0, note: '' };
 
   cardEl.innerHTML = `
     <div class="card">
@@ -300,6 +416,9 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
       ${slider('sleep', 'Sleep', v.sleep != null ? v.sleep : 7, 12, null, 0.5, 'h')}
       ${slider('sleep-quality', 'Sleep quality', v.sleepQuality != null ? v.sleepQuality : 5, 10, WELLBEING_WORDS)}
       ${slider('fatigue', 'Fatigue', v.fatigue != null ? v.fatigue : 5, 10, FATIGUE_WORDS, 1, '', 1)}
+      <div class="chip-row" style="margin-top:-6px; margin-bottom:14px">
+        <button type="button" class="chip toggle ${v.fatigueExercise ? 'on' : ''}" id="ci-fatigue-ex" aria-pressed="${!!v.fatigueExercise}">Exercise-induced</button>
+      </div>
       <div class="slider-label"><span>Exercise</span><span class="val" id="ex-val">${v.exercise != null ? v.exercise : 0} min</span></div>
       <div class="chip-row" style="margin-top:6px" id="ex-chips">
         <button type="button" class="chip" data-add="5">+5 min</button>
@@ -326,10 +445,11 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
     <div class="card">
       <h2>Stools</h2>
       ${visitListHtml(visits)}
-      <div style="display:flex; align-items:center; gap:10px; ${visits.length ? 'margin-top:6px;' : ''}">
+      <div class="visit-btns" style="${visits.length ? 'margin-top:6px;' : ''}">
         <button type="button" class="btn" id="ci-add-visit">+ Log stool</button>
-        <span class="empty-note" style="flex:1; padding:0;">${visits.length ? `${visits.length} logged — tap one to edit` : (isToday ? 'Logs a visit at the current time' : 'Adds a visit to this day')}</span>
+        <button type="button" class="btn" id="ci-add-gas">+ Gas only</button>
       </div>
+      <p class="empty-note" style="padding:6px 0 0;">${visits.length ? `${stoolCount} stool${stoolCount === 1 ? '' : 's'}${gasCount ? ` + ${gasCount} gas only` : ''} — tap one to edit` : (isToday ? 'Logs a visit at the current time' : 'Adds a visit to this day')}</p>
       ${visits.length ? '' : `
       <div class="stepper-row" style="margin-top:10px">
         <span>Total for the day (manual)</span>
@@ -384,7 +504,15 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
     alVal.textContent = '0 units';
   });
 
-  let stools = visits.length || v.stools;
+  let stools = visits.length ? stoolCount : v.stools;
+
+  let fatigueExercise = !!v.fatigueExercise;
+  const fxChip = cardEl.querySelector('#ci-fatigue-ex');
+  fxChip.addEventListener('click', () => {
+    fatigueExercise = !fatigueExercise;
+    fxChip.classList.toggle('on', fatigueExercise);
+    fxChip.setAttribute('aria-pressed', fatigueExercise);
+  });
   const stoolsEl = cardEl.querySelector('#ci-stools');
   if (stoolsEl) {
     cardEl.querySelectorAll('.stepper button').forEach(b => b.addEventListener('click', () => {
@@ -405,6 +533,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
     sleep: Number(cardEl.querySelector('#ci-sleep').value),
     sleepQuality: Number(cardEl.querySelector('#ci-sleep-quality').value),
     fatigue: Number(cardEl.querySelector('#ci-fatigue').value),
+    fatigueExercise,
     exercise,
     alcohol,
     note: cardEl.querySelector('#ci-note').value,
@@ -442,6 +571,7 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
       sleep: Number(cardEl.querySelector('#ci-sleep').value),
       sleepQuality: Number(cardEl.querySelector('#ci-sleep-quality').value),
       fatigue: Number(cardEl.querySelector('#ci-fatigue').value),
+      fatigueExercise,
       exercise,
       alcohol,
       note: cardEl.querySelector('#ci-note').value.trim(),
@@ -456,19 +586,24 @@ function renderCheckinCard(cardEl, date, day, visits, onSaved, draft) {
 /* Keep day.stools consistent with logged visits so exports and old views agree */
 async function syncDayStools(date) {
   const [day, visits] = await Promise.all([dbGet('days', date), getStoolsByDate(date)]);
-  if (day && visits.length && day.stools !== visits.length) {
-    day.stools = visits.length;
+  const count = stoolVisits(visits).length;
+  if (day && visits.length && day.stools !== count) {
+    day.stools = count;
     await dbPut('days', day);
   }
 }
 
-function openStoolSheet(visit, date, onChange) {
+function openStoolSheet(visit, date, onChange, gasOnly) {
   const isNew = !visit;
-  const v = visit || { id: crypto.randomUUID(), date, time: date === todayStr() ? nowTime() : '12:00', bristol: null, note: '' };
+  const v = visit || { id: crypto.randomUUID(), date, time: date === todayStr() ? nowTime() : '12:00', bristol: null, gasOnly: !!gasOnly, note: '' };
   let bristol = v.bristol;
+  let isGas = !!v.gasOnly;
   const sheet = openSheet(`
-    <h2>${isNew ? 'Add stool visit' : 'Edit stool visit'}</h2>
+    <h2>${isNew ? 'Add visit' : 'Edit visit'}</h2>
     <div class="sheet-row"><input type="time" id="sv-time" value="${v.time}"></div>
+    <div class="chip-row" style="margin:0 0 10px">
+      <button type="button" class="chip toggle ${isGas ? 'on' : ''}" id="sv-gas" aria-pressed="${isGas}">Gas only — no stool</button>
+    </div>
     <div class="bristol-row" id="sv-bristol">
       ${[1, 2, 3, 4, 5, 6, 7].map(n => `<button type="button" class="bristol-btn ${bristol === n ? 'on' : ''}" data-b="${n}">${n}</button>`).join('')}
     </div>
@@ -479,14 +614,30 @@ function openStoolSheet(visit, date, onChange) {
       <button class="btn primary" id="sv-save">Save</button>
     </div>
   `);
-  sheet.querySelectorAll('#sv-bristol .bristol-btn').forEach(b => b.addEventListener('click', () => {
+  const bRow = sheet.querySelector('#sv-bristol');
+  const desc = sheet.querySelector('#sv-desc');
+  const gasChip = sheet.querySelector('#sv-gas');
+  function paint() {
+    bRow.querySelectorAll('.bristol-btn').forEach(x => x.classList.toggle('on', Number(x.dataset.b) === bristol));
+    bRow.classList.toggle('disabled', isGas);
+    gasChip.classList.toggle('on', isGas);
+    gasChip.setAttribute('aria-pressed', isGas);
+    desc.textContent = isGas ? 'Not counted as a stool' : bristol ? BRISTOL_DESC[bristol] : 'Tap a type (optional)';
+  }
+  paint();
+  bRow.querySelectorAll('.bristol-btn').forEach(b => b.addEventListener('click', () => {
     const n = Number(b.dataset.b);
     bristol = bristol === n ? null : n;
-    sheet.querySelectorAll('#sv-bristol .bristol-btn').forEach(x => x.classList.toggle('on', Number(x.dataset.b) === bristol));
-    sheet.querySelector('#sv-desc').textContent = bristol ? BRISTOL_DESC[bristol] : 'Tap a type (optional)';
+    isGas = false;
+    paint();
   }));
+  gasChip.addEventListener('click', () => {
+    isGas = !isGas;
+    if (isGas) bristol = null;
+    paint();
+  });
   sheet.querySelector('#sv-save').addEventListener('click', async () => {
-    await dbPut('stools', { ...v, time: sheet.querySelector('#sv-time').value || v.time, bristol, note: sheet.querySelector('#sv-note').value.trim() });
+    await dbPut('stools', { ...v, time: sheet.querySelector('#sv-time').value || v.time, bristol, gasOnly: isGas, note: sheet.querySelector('#sv-note').value.trim() });
     closeSheet();
     toast(isNew ? 'Visit added' : 'Visit updated');
     onChange();
@@ -515,7 +666,10 @@ function slider(id, label, value, max, words, step, unit, min) {
 
 async function renderHistory() {
   const container = document.getElementById('tab-history');
-  const [allDays, allMeals] = await Promise.all([dbGetAll('days'), dbGetAll('meals')]);
+  const [allDays, allMeals, allStools, allDoses] = await Promise.all([dbGetAll('days'), dbGetAll('meals'), dbGetAll('stools'), dbGetAll('doses')]);
+  const stoolsByDate = {};
+  for (const s of allStools) (stoolsByDate[s.date] = stoolsByDate[s.date] || []).push(s);
+  const dosedDates = new Set(allDoses.map(x => x.date));
   const mealsByDate = {};
   for (const m of allMeals) (mealsByDate[m.date] = mealsByDate[m.date] || []).push(m);
   const dayByDate = {};
@@ -546,8 +700,8 @@ async function renderHistory() {
     row.className = 'day-row';
     row.innerHTML = `
       <span class="day-date">${fmtDate(date)}${date === today ? '<span class="weekday">today</span>' : ''}</span>
-      <span class="day-dots">${day ? severityDots(day) : '<span class="day-meta">no check-in</span>'}</span>
-      <span class="day-meta">${meals.length ? meals.length + ' meal' + (meals.length > 1 ? 's' : '') : ''}</span>
+      <span class="day-dots">${day ? severityDots(day, stoolsByDate[date]) : '<span class="day-meta">no check-in</span>'}</span>
+      <span class="day-meta">${dosedDates.has(date) ? '<span class="dose-mark" title="Psyllium taken">P</span>' : ''}${meals.length ? meals.length + ' meal' + (meals.length > 1 ? 's' : '') : ''}</span>
       <svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6l-6 6"/></svg>
     `;
     list.appendChild(row);
@@ -565,17 +719,19 @@ async function renderHistory() {
   }
 }
 
-function severityDots(day) {
+function severityDots(day, visits) {
   const dot = (v, color) =>
     `<span class="dot" style="background:var(--${color}); opacity:${(0.15 + (v / 5) * 0.85).toFixed(2)}"></span>`;
-  const good = isGoodDay(day)
+  const good = isGoodDay(day, visits)
     ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="var(--good)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:2px"><path d="M5 12l5 5l10 -10"/></svg>` : '';
   return `${good}${dot(day.bloating, 'bloat')}${dot(day.gas, 'gas')}${dot(day.urgency, 'urg')}${day.discomfort != null ? dot(day.discomfort, 'discomfort') : ''}`;
 }
 
 async function fillDayDetail(detail, date, day, meals) {
-  const visits = await getStoolsByDate(date);
+  const [visits, doses] = await Promise.all([getStoolsByDate(date), getDosesByDate(date)]);
+  const showDose = trialPhase(date) || doses.length;
   detail.innerHTML = `
+    ${showDose ? '<div id="d-dose" class="dose-inline"></div>' : ''}
     <p class="section-label">Meals</p>
     <div class="meal-list" id="d-meals"></div>
     <div class="meal-input-row" style="margin-top:8px">
@@ -587,6 +743,7 @@ async function fillDayDetail(detail, date, day, meals) {
     <div id="d-checkin"></div>
   `;
   const refresh = () => renderHistory();
+  if (showDose) renderDoseCard(detail.querySelector('#d-dose'), date, doses, refresh);
   renderMealList(detail.querySelector('#d-meals'), meals, refresh);
   detail.querySelector('#d-meal-add').addEventListener('click', async () => {
     const text = detail.querySelector('#d-meal-text').value.trim();

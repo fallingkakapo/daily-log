@@ -452,3 +452,14 @@ input[type="range"]::-webkit-slider-thumb {
   white-space: nowrap;
 }
 .toast.show { opacity: 1; }
+
+/* v9: toggle chips, paired visit buttons, psyllium */
+.chip.toggle.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { .chip.toggle.on { color: #1c1c2e; } }
+.visit-btns { display: flex; gap: 8px; }
+.visit-btns .btn { flex: 1; }
+.bristol-row.disabled { opacity: 0.35; }
+.dose-inline { margin-bottom: 4px; }
+.dose-inline h2 { font-size: 15px; font-weight: 600; margin: 12px 0 6px; }
+.dose-inline h2 .sub { color: var(--muted); font-weight: 400; font-size: 13px; }
+.dose-mark { display: inline-block; font-size: 10px; font-weight: 600; color: var(--accent-text); background: var(--accent-soft); border-radius: 4px; padding: 1px 4px; margin-right: 5px; }

@@ -136,17 +136,17 @@ function renderTrends(container, allDays, allStools, windowDays, onWindowChange)
   const withData = windowRecords.filter(Boolean);
   const labels = xLabels(dates);
 
-  /* stools per day: logged visits win, manual daily count is the fallback */
+  /* stools per day: logged visits win (gas-only excluded), manual daily count is the fallback */
   const stoolSeries = dates.map(dt => {
     const ev = stoolsByDate[dt];
-    if (ev && ev.length) return ev.length;
+    if (ev && ev.length) return stoolVisits(ev).length;
     return byDate[dt] ? byDate[dt].stools : null;
   });
 
   /* bristol distribution: per-visit ratings where present, else the day's typical */
   const bristolNums = [];
   for (const dt of dates) {
-    const rated = (stoolsByDate[dt] || []).filter(s => s.bristol);
+    const rated = stoolVisits(stoolsByDate[dt]).filter(s => s.bristol);
     if (rated.length) bristolNums.push(...rated.map(s => s.bristol));
     else if (byDate[dt] && byDate[dt].bristol) bristolNums.push(byDate[dt].bristol);
   }
@@ -155,7 +155,7 @@ function renderTrends(container, allDays, allStools, windowDays, onWindowChange)
   const hourCounts = Array(24).fill(0);
   let visitTotal = 0;
   for (const dt of dates) {
-    for (const s of (stoolsByDate[dt] || [])) {
+    for (const s of stoolVisits(stoolsByDate[dt])) {
       const h = parseInt(s.time, 10);
       if (h >= 0 && h < 24) { hourCounts[h]++; visitTotal++; }
     }
@@ -173,7 +173,7 @@ function renderTrends(container, allDays, allStools, windowDays, onWindowChange)
     return;
   }
 
-  const goodDays = withData.filter(isGoodDay).length;
+  const goodDays = withData.filter(d => isGoodDay(d, stoolsByDate[d.date])).length;
   const series = key => windowRecords.map(d => d ? d[key] : null);
 
   container.innerHTML = segRow + `
