@@ -1,6 +1,6 @@
 /* Daily Log — app shell, Today + History tabs, sheets. Trends rendering lives in trends.js */
 
-const APP_VERSION = 'v10'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v11'; // keep in step with VERSION in sw.js
 
 const BRISTOL_DESC = {
   1: 'Type 1 — separate hard lumps',
@@ -262,34 +262,48 @@ function renderMealList(listEl, meals, onChange) {
 
 /* ---------- psyllium (shared by Today and History) ---------- */
 
+function fmtGrams(g) {
+  return (Math.round(g * 100) / 100) + ' g';
+}
+
+/* Doses can be split through the day; the primary button logs whatever is
+   left of the daily target, "Other amount" logs a custom quantity */
 function renderDoseCard(el, date, doses, onChange) {
   const phase = trialPhase(date);
   const phaseText = phase ? `${phase.on ? 'ON' : 'OFF'} · day ${phase.day} of ${phase.len}` : '';
-  const hint = doses.length ? 'Tap to change the time'
-    : phase && !phase.on ? 'OFF week — no dose today'
-    : date === todayStr() ? 'Logs a dose at the current time' : 'Adds a dose to this day';
+  const total = doses.reduce((a, x) => a + (x.grams || 0), 0);
+  const remaining = Math.round((PSYLLIUM_GRAMS - total) * 100) / 100;
+  const isToday = date === todayStr();
+  const hint = phase && !phase.on && !doses.length ? 'OFF week — no dose today'
+    : doses.length ? (remaining > 0 ? `${fmtGrams(total)} of ${fmtGrams(PSYLLIUM_GRAMS)} so far — tap a dose to edit` : 'Tap a dose to edit it')
+    : isToday ? 'Logs a dose at the current time' : 'Adds a dose to this day';
   el.innerHTML = `
-    <h2>Psyllium <span class="sub">· ${PSYLLIUM_GRAMS} g${phaseText ? ' · ' + phaseText : ''}</span></h2>
+    <h2>Psyllium <span class="sub">· ${doses.length ? `${fmtGrams(total)} / ` : ''}${fmtGrams(PSYLLIUM_GRAMS)}${phaseText ? ' · ' + phaseText : ''}</span></h2>
     ${doses.length ? `<div class="meal-list">${doses.map(x => `
       <div class="meal-row" data-id="${x.id}">
         <span class="meal-time">${x.time}</span>
-        <span class="meal-text">Taken${x.grams !== PSYLLIUM_GRAMS ? ` · ${x.grams} g` : ''}</span>
-      </div>`).join('')}</div>` : `
-      <div class="visit-btns">
-        <button type="button" class="btn ${phase && !phase.on ? '' : 'primary'}" id="dose-add">Log dose</button>
-      </div>`}
+        <span class="meal-text">${fmtGrams(x.grams)}</span>
+      </div>`).join('')}</div>` : ''}
+    <div class="visit-btns" style="${doses.length ? 'margin-top:6px;' : ''}">
+      ${remaining > 0 ? `<button type="button" class="btn ${phase && !phase.on ? '' : 'primary'}" id="dose-add">${doses.length ? `Log remaining ${fmtGrams(remaining)}` : `Log ${fmtGrams(PSYLLIUM_GRAMS)}`}</button>` : ''}
+      <button type="button" class="btn" id="dose-other">${remaining > 0 ? 'Other amount' : '+ Add more'}</button>
+    </div>
     <p class="empty-note" style="padding:6px 0 0;">${hint}</p>
   `;
   const add = el.querySelector('#dose-add');
   if (add) add.addEventListener('click', async (e) => {
     e.stopPropagation();
-    if (date === todayStr()) {
-      await dbPut('doses', { id: crypto.randomUUID(), date, time: nowTime(), what: 'psyllium', grams: PSYLLIUM_GRAMS });
-      toast('Psyllium logged');
+    if (isToday) {
+      await dbPut('doses', { id: crypto.randomUUID(), date, time: nowTime(), what: 'psyllium', grams: remaining });
+      toast(`Psyllium logged · ${fmtGrams(remaining)}`);
       onChange();
     } else {
-      openDoseSheet(null, date, onChange);
+      openDoseSheet(null, date, onChange, remaining);
     }
+  });
+  el.querySelector('#dose-other').addEventListener('click', (e) => {
+    e.stopPropagation();
+    openDoseSheet(null, date, onChange, remaining > 0 ? remaining : PSYLLIUM_GRAMS);
   });
   el.querySelectorAll('.meal-row').forEach(row => row.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -297,21 +311,34 @@ function renderDoseCard(el, date, doses, onChange) {
   }));
 }
 
-function openDoseSheet(dose, date, onChange) {
+function openDoseSheet(dose, date, onChange, grams) {
   const isNew = !dose;
-  const x = dose || { id: crypto.randomUUID(), date, time: '09:00', what: 'psyllium', grams: PSYLLIUM_GRAMS };
+  const x = dose || { id: crypto.randomUUID(), date, time: date === todayStr() ? nowTime() : '09:00', what: 'psyllium', grams: grams || PSYLLIUM_GRAMS };
   const sheet = openSheet(`
     <h2>${isNew ? 'Add psyllium dose' : 'Edit psyllium dose'}</h2>
     <div class="sheet-row"><input type="time" id="ds-time" value="${x.time}"></div>
+    <div class="sheet-row dose-grams">
+      <input type="number" id="ds-grams" inputmode="decimal" min="0.25" max="30" step="0.25" value="${x.grams}">
+      <span>g</span>
+    </div>
+    <div class="chip-row" id="ds-chips" style="margin:0 0 4px">
+      ${[2.5, 3.75, 5, 7.5].map(g => `<button type="button" class="chip" data-g="${g}">${g} g</button>`).join('')}
+    </div>
     <div class="actions">
       ${isNew ? '' : '<button class="btn danger" id="ds-delete">Delete</button>'}
       <button class="btn primary" id="ds-save">Save</button>
     </div>
   `);
+  const gramsInput = sheet.querySelector('#ds-grams');
+  sheet.querySelectorAll('#ds-chips .chip').forEach(c => c.addEventListener('click', () => {
+    gramsInput.value = c.dataset.g;
+  }));
   sheet.querySelector('#ds-save').addEventListener('click', async () => {
-    await dbPut('doses', { ...x, time: sheet.querySelector('#ds-time').value || x.time });
+    const g = Math.round(parseFloat(gramsInput.value) * 100) / 100;
+    if (!(g > 0 && g <= 30)) { gramsInput.focus(); toast('Enter an amount in grams'); return; }
+    await dbPut('doses', { ...x, time: sheet.querySelector('#ds-time').value || x.time, grams: g });
     closeSheet();
-    toast(isNew ? 'Dose added' : 'Dose updated');
+    toast(isNew ? `Dose added · ${fmtGrams(g)}` : 'Dose updated');
     onChange();
   });
   const del = sheet.querySelector('#ds-delete');

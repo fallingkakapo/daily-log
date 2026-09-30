@@ -467,3 +467,7 @@ input[type="range"]::-webkit-slider-thumb {
 .chart-note { font-size: 11px; color: var(--muted); margin: 6px 0 0; display: flex; align-items: center; gap: 5px; }
 .key-band { display: inline-block; width: 12px; height: 10px; border-radius: 2px; background: var(--accent); opacity: 0.25; }
 .key-ref { display: inline-block; width: 14px; border-top: 1.5px dashed currentColor; opacity: 0.6; }
+
+.dose-grams { display: flex; align-items: center; gap: 8px; }
+.dose-grams input { flex: 1; }
+.dose-grams span { color: var(--muted); }
